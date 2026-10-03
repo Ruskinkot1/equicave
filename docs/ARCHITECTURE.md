@@ -63,11 +63,14 @@ for it. The groove tier therefore changes three things:
   6 Å of every candidate point. Peptide recognition pairs backbone with backbone (β-augmentation, PDZ, SH3, MHC), so
   the backbone-to-side-chain ratio separates a peptide groove from a side-chain-lined small-molecule cavity.
 
-`score = Σ buriedness × min(anisotropy, 6)`. `merge_with_small_molecule` produces one list with `tier ∈ {1,2,3}` so the
-ranker can learn which generator to trust for a given receptor. Measured on 50 RCSB protein-peptide complexes with the
-peptide chains removed from the input: cavity tiers reach a 0.98 ceiling, the groove tier alone 0.80 (30 candidates) /
-0.80 (40). **The candidate generator is not the bottleneck for peptide sites; the ranking is** — which is exactly what
-the peptide feature group is for.
+`score = Σ buriedness × min(anisotropy, 6)`. `merge_with_small_molecule` produces one list with `tier ∈ {1,2,3}`, keeping
+overlapping candidates (a groove and a cavity description of the same region are both useful) and recording their
+mutual distance, so the ranker can learn which generator to trust for a given receptor.
+
+Measured on the 894-receptor benchmark with the peptide chains removed from the input (`docs/results/peptide_sites.md`):
+cavity tiers reach a ceiling of 0.930, the groove tier alone 0.768, both together 0.945 at 44.3 candidates. Groove
+candidates uniquely find only **1.6 %** of the sites, so **the candidate generator is not the bottleneck for peptide
+sites; the ranking is**, and the groove tier contributes features rather than coverage.
 
 ---
 
@@ -187,7 +190,7 @@ is built by `scripts/train/collect_ablations.py` with paired differences against
 
 ## Stage 3. Hybrid ranker (`src/equicave/pocket_features.py`, `scripts/train/train_ranker.py`)
 
-A candidate is described by 32 protein-agnostic numbers in four groups (no finder scores exist in this project):
+A candidate is described by 109 protein-agnostic numbers in six groups (no external finder scores exist in this project):
 
 - **native** (8): `nat_score`, `nat_rank`, `nat_rel` (score / best score in the structure), `nat_npts`,
   `nat_mean_bur`, `nat_max_bur`, `nat_cavity_npts`, `nat_tier`.
@@ -195,18 +198,44 @@ A candidate is described by 32 protein-agnostic numbers in four groups (no finde
   centrality (‖centre − protein centroid‖ / radius of gyration), depth (distance to the nearest atom).
 - **chemistry** (14): atom and residue composition within 8 Å — element fractions, backbone fraction, residue count,
   and the fractions of hydrophobic, aromatic, polar, positive, negative, Gly and Pro residues.
+- **shell** (46): the receptor interaction partners the candidate offers in 5, 8 and 12 Å shells — donors, acceptors,
+  cations, anions, aromatic ring atoms and hydrophobic carbons, as counts and as fractions of all atoms in the shell —
+  plus Kyte-Doolittle hydropathy (mean and sum), b-factor mean and standard deviation, residue counts at 5 and 12 Å,
+  the donor/acceptor balance, the charge balance, the polar-to-apolar ratio and donors+acceptors per unit volume.
+- **potential** (21): the interaction-potential field of the candidate's own points. For each point the same geometric
+  tests as the hotspot labels are asked of the *empty* point: is there a receptor acceptor within 3.5 Å (so a donor
+  placed here would be satisfied), a donor within 3.5 Å, a hydrophobic carbon within 4.5 Å, an aromatic ring atom
+  within 5.5 Å, an anion or a cation within 4.0 Å, an acceptor within 3.8 Å for a halogen. The features are the
+  fraction and count of points offering each class, the mean number of classes per point, the fraction of points
+  offering two or three classes at once, the fraction offering both a polar and an apolar partner, the best point, and
+  the volume of the three-class region. This is the physics-free prior that separates a real site from an equally deep
+  but chemically featureless hole, and the geometric counterpart of the learned hotspot field.
 - **context** (2): residue count of the protein, number of candidates in the structure.
 - **network** (3, optional): `net_seg`, `net_center_conf`, `net_hot_mean` from the out-of-fold network.
-- **peptide** (13, for peptide targets): tier, length, width, anisotropy, flatness, backbone N/O/Cα and side-chain
-  counts, backbone total, backbone-to-side-chain ratio, backbone per point.
+- **peptide** (14, for peptide targets): tier, length, width, anisotropy, flatness, exposed receptor backbone N, O and
+  Cα counts, side-chain carbon and polar counts, backbone total, backbone-to-side-chain ratio, backbone per point, and
+  the distance to the nearest candidate of the other generator.
 
-Model: LightGBM **LambdaRank** (one query = one structure, truncation level 5, 300 rounds, lr 0.05, 15 leaves,
-feature and bagging fraction 0.8, L2 1.0). Protocol: 5-fold cross-validation **by 30 %-identity cluster**, 5 seeds,
-95 % bootstrap CI over clusters, and a **paired** cluster bootstrap of every gain against the detector order.
-Alternatives to test next: a listwise transformer over the candidate set (softmax CE) and stacking; isotonic
-calibration of the final score. The cross-validation winner is kept.
+Model: LightGBM **LambdaRank** (one query = one structure, truncation level 10, 400 rounds, lr 0.05, 31 leaves,
+feature and bagging fraction 0.8, L2 1.0, label gain [0, 1, 3]) with three additions, each switchable so its
+contribution appears in the ablation table:
 
-Measured (1367 structures, 1017 clusters, 40 986 candidates, ceiling 0.977):
+- **graded relevance**: 2 when the centre is within 2 Å of a ligand atom, 1 within 4 Å, 0 otherwise. Ranking a centre
+  that sits on the ligand above one that merely touches it is what top-1 actually rewards.
+- **within-structure z-scores**: every feature is also supplied as its z-score inside its own structure, because
+  pocket ranking is a comparison between the cavities of one protein ("deeper than the others here"), not an absolute
+  judgement.
+- **seed ensemble**: the shipped score is the mean over seeds, reported next to the per-seed mean.
+
+Afterwards the score is mapped to a probability by an **isotonic regression fitted out of fold** (fold k is calibrated
+on the other folds' out-of-fold scores), which leaves the ranking inside a structure unchanged and makes the number
+readable as P(this candidate hits a ligand); the expected calibration error and Brier score are reported before and
+after. Protocol: 5-fold cross-validation **by 30 %-identity cluster**, 5 seeds, 95 % bootstrap CI over clusters, and a
+**paired** cluster bootstrap of every gain against the detector order. Alternatives still to test: a listwise
+transformer over the candidate set (softmax CE) and stacking; the cross-validation winner is kept.
+
+Measured with the first 32-feature version (1367 structures, 1017 clusters, 40 986 candidates, ceiling 0.977);
+the 109-feature version with graded relevance, z-scores and calibration is in `docs/results/ranker_native.md`:
 
 | method | top-1 | top-3 | top-N | top-(N+2) |
 |---|---|---|---|---|
