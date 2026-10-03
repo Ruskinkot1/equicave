@@ -125,21 +125,31 @@ def detect_peptide_sites(xyz: np.ndarray, st: dict | None = None, step: float = 
     return (cands, field) if return_field else cands
 
 
+PEPTIDE_FEATURES = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o",
+                    "pep_bb_ca", "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point"]
+
+
 def groove_features(cands: list[dict], st: dict) -> list[dict]:
-    """Peptide-specific features per candidate (used in addition to the shared geometry / chemistry features)."""
+    """Peptide-specific features for candidates of **any** tier, so grooves and cavities are described alike.
+
+    Shape (length, width, flatness, anisotropy) comes from the candidate's own points; backbone exposure is
+    recomputed when the candidate did not carry it. `pep_tier` keeps the generator that produced the candidate
+    (1 deep cavity, 2 shallow cavity, 3 groove), which is what lets the ranker prefer grooves for peptide targets.
+    """
     rows = []
-    mx = max([c["score"] for c in cands] + [1e-9])
     for c in cands:
         ex = {f"pep_{k}": c.get(f"pep_{k}") for k in ("bb_n", "bb_o", "bb_ca", "sc_c", "sc_polar")}
         if any(v is None for v in ex.values()):
             e = backbone_exposure(c["points"], st)
             ex = {f"pep_{k}": float(v.mean()) for k, v in e.items()}
+        ax = [c.get("length"), c.get("width"), c.get("depth_extent")]
+        if any(v is None for v in ax):
+            ax = pk.shape_axes(c["points"])
         bb = ex["pep_bb_n"] + ex["pep_bb_o"]
-        rows.append(dict(pep_score=c["score"], pep_rank=c["rank"], pep_rel=c["score"] / mx, pep_npts=c["n_points"],
-                         pep_mean_bur=c["mean_buried"], pep_length=c["length"], pep_width=c["width"],
-                         pep_anisotropy=c["anisotropy"], pep_bb_total=bb,
-                         pep_bb_ratio=bb / max(1.0, bb + ex["pep_sc_c"] + ex["pep_sc_polar"]), **ex,
-                         n_pep_cands=len(cands)))
+        rows.append(dict(pep_tier=int(c.get("tier", 1)), pep_length=float(ax[0]), pep_width=float(ax[1]),
+                         pep_anisotropy=float(ax[0] / max(ax[2], 1.0)), pep_flatness=float(ax[1] / max(ax[2], 1.0)),
+                         pep_bb_total=bb, pep_bb_ratio=bb / max(1.0, bb + ex["pep_sc_c"] + ex["pep_sc_polar"]),
+                         pep_bb_per_point=bb / max(1.0, c["n_points"]), **ex))
     return rows
 
 

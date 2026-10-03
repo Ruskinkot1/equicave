@@ -29,7 +29,9 @@ CHEMISTRY = ["n_atoms", "f_C", "f_N", "f_O", "f_S", "f_backbone", "n_res", "r_hy
 CONTEXT = ["prot_n_res", "n_cands"]
 FEATURES = NATIVE + GEOMETRY + CHEMISTRY + CONTEXT
 NET_FEATURES = ["net_seg", "net_center_conf", "net_hot_mean"]          # appended when a network model scores the sites
-GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, context=CONTEXT, network=NET_FEATURES)
+PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
+           "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point"]
+GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE)
 
 
 def featurize(cands: list[dict], st: dict, radius: float = CAV_R) -> list[dict]:

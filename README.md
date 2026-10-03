@@ -1,3 +1,101 @@
 # EquiCave
 
-Self-contained, equivariant, multi-task model of protein binding pockets. Work in progress; see `docs/`.
+**Self-contained, equivariant, multi-task model of protein binding pockets.** One structure in, three outputs out:
+
+1. **Where** — ranked binding sites (own geometric candidate generator + learned re-ranker + equivariant network).
+2. **What kind** — multi-label pocket property classes (ligand class, size, buriedness, polarity, charge).
+3. **Where exactly** — a hotspot field: probability of a ligand atom of each class at each grid point inside the pocket.
+4. **Peptide binders** — a separate groove candidate tier and peptide-specific features for peptide-binding sites.
+
+No P2Rank, no fpocket, no Java at training or inference. `src/` and `training/` depend only on numpy, scipy, pandas,
+LightGBM, scikit-learn and (for the network) PyTorch. fpocket and P2Rank appear only in `scripts/baselines/` as
+optional comparison methods.
+
+## Measured so far (CPU, this repository, 2026-10-03)
+| result | number | protocol |
+|---|---|---|
+| native candidate ceiling | **0.977** (1367 structures, mean 30.0 candidates, median best DCA 0.65 Å) | DCA ≤ 4 Å to any ligand copy with ≥ 8 heavy atoms |
+| ranker top-1 | **0.724 [0.701, 0.748]** vs detector order 0.523 [0.494, 0.552] | 5-fold CV by 30 %-identity cluster, 5 seeds, cluster bootstrap |
+| ranker top-(N+2) | **0.877 [0.859, 0.896]** | same |
+| peptide-site candidate ceiling | 0.98 with cavity tiers, 0.80 with groove tier alone (50-complex probe) | DCA ≤ 4 Å to any peptide heavy atom, peptide chains removed from the input |
+| EquiCave-Net | **not trained** (exact equivariance tests pass; CPU pilot only) | needs a GPU; see below |
+
+Numbers from unconverged runs are never published here. Anything missing is marked "not run".
+
+## Install
+```bash
+git clone <this repo> && cd equicave
+make setup                 # pip install -e ".[dev]" and ".[train]"
+make test                  # 26 CPU tests on synthetic data, must stay green
+```
+GPU machines: `micromamba create -y -f training/environment.yml && micromamba activate equicave-train`
+(or `docker build -t equicave-train -f training/Dockerfile .`).
+
+## Run the whole pipeline
+```bash
+export PYTHONPATH=src:.
+
+# 1. data: RCSB manifest (CC0) with 30 %-identity clusters, 5 cluster folds, held-out families; then structures
+make data                  # ~20 min, writes data/processed/manifest.csv + data/pockets_ds/pdb (ignored by git)
+
+# 2. native candidates: 1 Å lattice, 26-ray buriedness, connected cavities, peak splitting; features and labels
+make candidates JOBS=8     # ~3.6 s per structure per core
+
+# 3. ranker: LightGBM LambdaRank, cluster 5-fold CV, 5 seeds, feature-group ablations, paired bootstrap
+make ranker                # ~3 min on 4 cores, writes docs/results/ranker_native.md and models/ranker_native.txt
+
+# 4. peptide-binding sites: own benchmark (RCSB protein-peptide complexes), merged cavity + groove candidates
+make peptide-data JOBS=8
+make peptide-ranker
+
+# 5. labels and their statistics (property classes from the CCD, hotspot classes per grid point)
+make labels
+
+# 6. GPU: the equivariant multi-task network
+make net                                        # one fold, config training/configs/pockets_net.yaml
+make net-oof                                    # out-of-fold network features for the hybrid ranker
+python scripts/train/train_ranker.py --features-extra net --seeds 5   # hybrid ranker
+make ablations                                  # the full ablation grid, 3 seeds each
+
+# 7. evaluation: one protocol for every benchmark
+make eval                                       # held-out families, COACH420, HOLO4K (+ LIGYSIS, CryptoBench when fetched)
+
+# optional: the same structures through fpocket and P2Rank, for the comparison table
+FPOCKET=/path/to/fpocket PRANK=/path/to/prank make baselines
+```
+
+### What your GPU machine should run
+```bash
+# one fold, 3 seeds, full config (dim 128, 5 layers, ESM-2 650M)
+for s in 0 1 2; do python -m training pockets-net --device cuda --out runs/training/net \
+    --set optim.seed=$s split.val_fold=0 tag=full; done
+# all five folds of the winning setting, then the out-of-fold features for the ranker
+for k in 0 1 2 3 4; do python -m training pockets-net --device cuda --set split.val_fold=$k tag=full; done
+python -m training pockets-net --device cuda --set mode=oof tag=full
+bash scripts/train/run_ablations.sh runs/training/ablations 0 3
+```
+Each run writes `runs/training/<tag>_fold<k>_seed<s>/` with `model.pt`, `history.json`, `metrics.json` and
+`model_card.json` (config, geometry constants, data scope, metrics). `scripts/train/collect_ablations.py` turns the
+cards into `docs/results/ablations.md`. A Colab notebook is in `notebooks/equicave_train.ipynb`.
+
+## Layout
+- `src/equicave/` — `structure.py` (PDB reader, peptide-chain ligands), `pockets.py` (free grid, 26-ray buriedness,
+  cavity mask, SAS cloud), `detect.py` (native candidates, two depth tiers), `peptide.py` (groove tier, backbone
+  exposure), `pocket_features.py` (ranker features and inference), `ccd.py` (ligand chemistry from the CCD),
+  `labels.py`, `metrics.py`, `targets.py`, `mcp_server.py` (MCP tools).
+- `training/` — `pockets/model.py` (EquiCave-Net), `pockets/data.py` (featurisation and cache), `pockets/net_task.py`
+  (training loop, EMA, early stopping, out-of-fold features), `pockets/labels_task.py`, `configs/`, `environment.yml`,
+  `Dockerfile`. One command per task: `python -m training list`.
+- `scripts/` — `data/` (manifests, structures, benchmark lists), `train/` (candidate tables, ranker, ablations),
+  `eval/evaluate.py` (one protocol for every benchmark), `baselines/` (optional fpocket / P2Rank).
+- `data/processed/` — small derived tables only (manifests, candidate features, label statistics). Raw structures and
+  third-party downloads are rebuilt by the scripts and never committed.
+- `docs/` — `ARCHITECTURE.md` (the network in full), `PLAN_2026.md` (month plan), `PAPER_PLAN.md`, `DATA_CARD.md`,
+  `LITERATURE.md`, `PROVENANCE.md`, `results/` (every measured table).
+- `.claude/skills/equivariant-gnn-researcher/` — review checklist for equivariant layers and evaluation protocol.
+
+## Licences and data policy
+Training data for the shipped model is RCSB PDB (CC0) and the wwPDB Chemical Component Dictionary (CC0).
+ESM-2 weights are MIT. Third-party benchmark sets are fetched by the user under their own terms and never
+redistributed here; a model trained on non-commercial data is labelled "non-commercial scope" in its model card.
+See `docs/DATA_CARD.md`. The repository is private and stays private; it has no open-source licence yet.

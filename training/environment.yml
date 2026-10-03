@@ -1,0 +1,19 @@
+# Training environment for EquiCave (GPU). CPU-only stages need just pip install -e ".[dev]".
+name: equicave-train
+channels: [conda-forge, pytorch, nvidia]
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - lightgbm
+  - pyyaml
+  - pytest
+  - pytorch=2.*
+  - pytorch-cuda=12.1          # drop this line on a CPU-only machine
+  - pip:
+      - transformers>=4.40      # ESM-2 weights (MIT)
+      - safetensors
+      - tqdm

@@ -72,7 +72,7 @@ def main():
             sub = [f for f in feats if f not in cols]
             if len(sub) < len(feats):
                 per_method[f"  without {g}"] = [evaluate(df, cv_scores(df, sub, sd)) for sd in range(max(2, a.seeds // 2))]
-        per_method["  native features only"] = [evaluate(df, [f for f in pf.NATIVE if f in feats], sd)) for sd in range(max(2, a.seeds // 2))]
+        per_method["  native features only"] = [evaluate(df, cv_scores(df, [f for f in pf.NATIVE if f in feats], sd)) for sd in range(max(2, a.seeds // 2))]
     ref = per_method["native order (detector score)"][0]
     for name, runs in per_method.items():
         avg = pd.concat(runs).groupby("pdb", sort=False).agg({c: "mean" for c in ("top1", "top3", "topN", "topN2", "mrr", "ceiling")} | {"cluster30": "first"}).reset_index()
