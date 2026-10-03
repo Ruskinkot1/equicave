@@ -22,21 +22,45 @@ POS, NEG = set("LYS ARG HIS".split()), set("ASP GLU".split())
 ENV_R = 8.0
 CAV_R = 8.0
 
+# Kyte-Doolittle hydropathy, used as a per-residue scalar around the candidate
+KD = {"ALA": 1.8, "ARG": -4.5, "ASN": -3.5, "ASP": -3.5, "CYS": 2.5, "GLN": -3.5, "GLU": -3.5, "GLY": -0.4,
+      "HIS": -3.2, "ILE": 4.5, "LEU": 3.8, "LYS": -3.9, "MET": 1.9, "PHE": 2.8, "PRO": -1.6, "SER": -0.8,
+      "THR": -0.7, "TRP": -0.9, "TYR": -1.3, "VAL": 4.2, "MSE": 1.9}
+SHELLS = (5.0, 8.0, 12.0)     # A: nested spheres around the candidate centre for the interaction-type counts
+
 NATIVE = ["nat_score", "nat_rank", "nat_rel", "nat_npts", "nat_mean_bur", "nat_max_bur", "nat_cavity_npts", "nat_tier"]
-GEOMETRY = ["cav_volume", "ax1", "ax2", "ax3", "buried_mean", "vol_rank", "centrality", "depth"]
+GEOMETRY = ["cav_volume", "ax1", "ax2", "ax3", "buried_mean", "vol_rank", "centrality", "depth",
+            "bur_std", "bur_p10", "bur_p90", "frac_deep", "frac_mouth", "width_mean", "width_max", "elongation",
+            "flatness", "pts_per_volume"]
 CHEMISTRY = ["n_atoms", "f_C", "f_N", "f_O", "f_S", "f_backbone", "n_res", "r_hydrophobic", "r_aromatic", "r_polar",
              "r_pos", "r_neg", "r_gly", "r_pro"]
+# receptor interaction partners in nested shells: what a ligand atom in this pocket could actually bind to
+SHELL = [f"{t}_{int(r)}" for r in SHELLS for t in ("donor", "acceptor", "cation", "anion", "aromatic", "hydrophobic")] + \
+        [f"f_{t}_{int(r)}" for r in SHELLS for t in ("donor", "acceptor", "cation", "anion", "aromatic", "hydrophobic")] + \
+        ["kd_mean", "kd_sum", "bfac_mean", "bfac_std", "n_res_5", "n_res_12", "hb_balance", "charge_balance",
+         "polar_apolar_ratio", "donor_acceptor_per_volume"]
 CONTEXT = ["prot_n_res", "n_cands"]
-FEATURES = NATIVE + GEOMETRY + CHEMISTRY + CONTEXT
+FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + CONTEXT
 NET_FEATURES = ["net_seg", "net_center_conf", "net_hot_mean"]          # appended when a network model scores the sites
 PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
-GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE)
+GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, context=CONTEXT,
+              network=NET_FEATURES, peptide=PEPTIDE)
 
 
 def featurize(cands: list[dict], st: dict, radius: float = CAV_R) -> list[dict]:
-    """One feature dict per candidate from `detect.detect_sites`; `st` is `structure.read_pdb(...)`."""
+    """One feature dict per candidate from `detect.detect_sites`; `st` is `structure.read_pdb(...)`.
+
+    Four groups of numbers, none of them family specific: the candidate as the generator produced it (`nat_*`), the
+    shape of its cavity, the atom and residue composition of its 8 A environment, and the receptor interaction
+    partners it offers in nested shells (`SHELL`) — how many donors, acceptors, cations, anions, aromatic ring atoms
+    and hydrophobic carbons a ligand atom placed here could actually bind to. The last group is what tells a real
+    binding site from an equally deep but chemically featureless hole.
+    """
+    from . import labels as LB
     xyz = st["xyz"]; tp = cKDTree(xyz)
+    types = LB.protein_atom_types(st)
+    trees = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types.items()}
     centroid = xyz.mean(0); rg = float(np.sqrt(((xyz - centroid) ** 2).sum(1).mean())) or 1.0
     n_res_total = len(set(st["resid"]))
     table = detect.candidate_table(cands)
@@ -44,15 +68,47 @@ def featurize(cands: list[dict], st: dict, radius: float = CAV_R) -> list[dict]:
     for c, t in zip(cands, table):
         _, _, cav = pk.cavity_box(c["center"], xyz, radius)
         sub = cav[np.random.default_rng(0).permutation(len(cav))[:300]]
+        bur_sub = pk._buried(sub, tp) if len(sub) else np.zeros(0)
         near = tp.query_ball_point(c["center"], ENV_R)
         el, rn, rid, bb = st["element"][near], st["resname"][near], st["resid"][near], st["backbone"][near]
         names = list({r: n for r, n in zip(rid, rn)}.values()); nr = max(1, len(names))
         ax = pk.shape_axes(cav) + [0.0, 0.0, 0.0]
         fr = lambda e: float((el == e).mean()) if len(el) else 0.0
+        # shape of the candidate's own points
+        cpts = np.asarray(c.get("points", cav)); cbur = np.asarray(c.get("buried", bur_sub), float)
+        width = tp.query(cpts)[0] if len(cpts) else np.zeros(1)
+        shell = {}
+        for r in SHELLS:
+            n_all = max(1, len(tp.query_ball_point(c["center"], r)))
+            for k, tr in trees.items():
+                cnt = len(tr.query_ball_point(c["center"], r)) if tr is not None else 0
+                shell[f"{k}_{int(r)}"] = float(cnt)
+                shell[f"f_{k}_{int(r)}"] = cnt / n_all
+        res5 = {r for r in st["resid"][tp.query_ball_point(c["center"], 5.0)]}
+        res12 = {r for r in st["resid"][tp.query_ball_point(c["center"], 12.0)]}
+        kd = [KD.get(str(n), 0.0) for n in names]
+        bf = st["bfactor"][near]
+        d8, a8 = shell["donor_8"], shell["acceptor_8"]
+        pos8, neg8 = shell["cation_8"], shell["anion_8"]
+        vol = max(1.0, float(len(cav)))
         rows.append(dict(
-            center=c["center"], **{k: t[k] for k in NATIVE}, n_cands=t["n_cands"],
+            center=c["center"], **{k: t[k] for k in NATIVE}, n_cands=t["n_cands"], **shell,
             cav_volume=float(len(cav)), ax1=ax[0], ax2=ax[1], ax3=ax[2],
-            buried_mean=float(pk._buried(sub, tp).mean()) if len(sub) else 0.0,
+            buried_mean=float(bur_sub.mean()) if len(bur_sub) else 0.0,
+            bur_std=float(cbur.std()) if len(cbur) else 0.0,
+            bur_p10=float(np.percentile(cbur, 10)) if len(cbur) else 0.0,
+            bur_p90=float(np.percentile(cbur, 90)) if len(cbur) else 0.0,
+            frac_deep=float((cbur >= detect.DETECT_MIN_BURIED).mean()) if len(cbur) else 0.0,
+            frac_mouth=float((cbur < detect.FILL_MIN_BURIED + 2).mean()) if len(cbur) else 0.0,
+            width_mean=float(width.mean()), width_max=float(width.max()),
+            elongation=float(ax[0] / max(ax[2], 1.0)), flatness=float(ax[1] / max(ax[2], 1.0)),
+            pts_per_volume=float(len(cpts)) / vol,
+            kd_mean=float(np.mean(kd)) if kd else 0.0, kd_sum=float(np.sum(kd)),
+            bfac_mean=float(bf.mean()) if len(bf) else 0.0, bfac_std=float(bf.std()) if len(bf) else 0.0,
+            n_res_5=float(len(res5)), n_res_12=float(len(res12)),
+            hb_balance=(d8 - a8) / max(1.0, d8 + a8), charge_balance=(pos8 - neg8) / max(1.0, pos8 + neg8),
+            polar_apolar_ratio=(d8 + a8) / max(1.0, shell["hydrophobic_8"]),
+            donor_acceptor_per_volume=(d8 + a8) / vol,
             depth=float(tp.query(c["center"])[0]),
             n_atoms=len(near), f_C=fr("C"), f_N=fr("N"), f_O=fr("O"), f_S=fr("S"),
             f_backbone=float(bb.mean()) if len(bb) else 0.0, n_res=len(names),
