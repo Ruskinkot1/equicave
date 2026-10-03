@@ -28,15 +28,19 @@ def one(task):
     pdb, path, rec_chains, pep_chains, meta, params = task
     t0 = time.time()
     try:
-        st = structure.read_pdb(path, rec_chains or None)
-        ligs = [l for l in structure.read_peptide_ligands(path, min_res=params["min_res"], max_res=params["max_res"])
-                if (not pep_chains or l["chain"] in pep_chains)]
+        found = structure.read_peptide_ligands(path, min_res=params["min_res"], max_res=params["max_res"])
+        # the manifest chain ids come from RCSB entities and need not match the deposited file, so they are a hint
+        ligs = [l for l in found if l["chain"] in pep_chains] or found
+        rec = "".join(c for c in structure.receptor_chains(path) if c not in {l["chain"] for l in ligs})
+        st = structure.read_pdb(path, rec or (rec_chains or None))
         if len(st["xyz"]) < 100 or not ligs:
             return [], dict(pdb=pdb, status="no_receptor_or_peptide")
         small = detect.detect_sites(st["xyz"], max_sites=params["small"])
         groove = PEP.detect_peptide_sites(st["xyz"], st, max_sites=params["groove"], min_points=20,
                                           min_anisotropy=1.5, nms=4.0)
         cands = PEP.merge_with_small_molecule(groove, small, max_sites=params["small"] + params["groove"])
+        for c in cands:
+            c.setdefault("tier", 1)
         if not cands:
             return [], dict(pdb=pdb, status="no_candidates")
         rows = pf.featurize(cands, st)
@@ -74,8 +78,8 @@ def main():
     ap.add_argument("--pdb-dir", default=str(REPO / "data/pockets_ds/pdb"))
     ap.add_argument("--out", default=str(REPO / "data/processed"))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4); ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--small", type=int, default=20); ap.add_argument("--groove", type=int, default=20)
-    ap.add_argument("--min-res", type=int, default=4); ap.add_argument("--max-res", type=int, default=25)
+    ap.add_argument("--small", type=int, default=30); ap.add_argument("--groove", type=int, default=20)
+    ap.add_argument("--min-res", type=int, default=4); ap.add_argument("--max-res", type=int, default=30)
     ap.add_argument("--tag", default="peptide")
     a = ap.parse_args()
     man = list(csv.DictReader(open(a.manifest)))

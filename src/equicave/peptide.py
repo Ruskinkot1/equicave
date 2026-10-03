@@ -126,7 +126,8 @@ def detect_peptide_sites(xyz: np.ndarray, st: dict | None = None, step: float = 
 
 
 PEPTIDE_FEATURES = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o",
-                    "pep_bb_ca", "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point"]
+                    "pep_bb_ca", "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point",
+                    "pep_overlap_dist"]
 
 
 def groove_features(cands: list[dict], st: dict) -> list[dict]:
@@ -149,23 +150,34 @@ def groove_features(cands: list[dict], st: dict) -> list[dict]:
         rows.append(dict(pep_tier=int(c.get("tier", 1)), pep_length=float(ax[0]), pep_width=float(ax[1]),
                          pep_anisotropy=float(ax[0] / max(ax[2], 1.0)), pep_flatness=float(ax[1] / max(ax[2], 1.0)),
                          pep_bb_total=bb, pep_bb_ratio=bb / max(1.0, bb + ex["pep_sc_c"] + ex["pep_sc_polar"]),
-                         pep_bb_per_point=bb / max(1.0, c["n_points"]), **ex))
+                         pep_bb_per_point=bb / max(1.0, c["n_points"]),
+                         pep_overlap_dist=float(c.get("overlap_dist", 99.0)), **ex))
     return rows
 
 
-def merge_with_small_molecule(pep: list[dict], small: list[dict], nms: float = 6.0, max_sites: int = MAX_SITES) -> list[dict]:
+def merge_with_small_molecule(pep: list[dict], small: list[dict], max_sites: int = 50, dedup: float = 2.0) -> list[dict]:
     """One candidate list for a structure that may bind either a peptide or a small molecule.
 
-    Small-molecule candidates keep their order; groove candidates that are not within `nms` of one of them are appended.
-    `tier` tells them apart (1 deep cavity, 2 shallow cavity, 3 groove), so the ranker can learn to prefer either.
+    A groove and a cavity candidate may describe the same region in two different ways (one deep sub-pocket, one
+    elongated groove), and both descriptions are useful to the ranker, so overlapping candidates are **kept**: only
+    near-duplicates (centres within `dedup`, 2 A by default) are dropped. Each candidate records `overlap_dist`, the
+    distance to the nearest candidate of the other generator, so the ranker can see whether the two agree.
+    `tier` tells the generators apart (1 deep cavity, 2 shallow cavity, 3 groove).
     """
-    out = [dict(c) for c in small]
-    have = np.array([c["center"] for c in out]).reshape(-1, 3)
-    for c in sorted(pep, key=lambda c: -c["score"]):
+    small = [dict(c) for c in small]; pep = sorted((dict(c) for c in pep), key=lambda c: -c["score"])
+    sc = np.array([c["center"] for c in small]).reshape(-1, 3)
+    pc = np.array([c["center"] for c in pep]).reshape(-1, 3)
+    for c in small:
+        c["overlap_dist"] = float(np.linalg.norm(pc - c["center"], axis=1).min()) if len(pc) else 99.0
+    for c in pep:
+        c["overlap_dist"] = float(np.linalg.norm(sc - c["center"], axis=1).min()) if len(sc) else 99.0
+    out = list(small)
+    have = sc.copy()
+    for c in pep:
         if len(out) >= max_sites:
             break
-        if len(have) == 0 or np.linalg.norm(have - c["center"], axis=1).min() > nms:
-            out.append(dict(c)); have = np.vstack([have, c["center"]])
+        if len(have) == 0 or np.linalg.norm(have - c["center"], axis=1).min() > dedup:
+            out.append(c); have = np.vstack([have, c["center"]]) if len(have) else c["center"][None]
     out.sort(key=lambda c: (c["tier"], -c["score"]))
     for r, c in enumerate(out, 1):
         c["rank"] = r

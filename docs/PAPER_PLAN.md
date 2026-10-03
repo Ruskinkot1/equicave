@@ -1,0 +1,73 @@
+# Paper plan
+
+**Working title.** *EquiCave: a self-contained equivariant multi-task model of binding pockets — ranked sites,
+pocket properties and ligand-atom hotspot fields, with a peptide-groove tier and homology-controlled evaluation.*
+
+Nothing in this plan is a result unless it appears in `docs/results/` with its protocol. Numbers taken from other
+papers are never compared directly to ours: every baseline is re-run on our splits.
+
+## Contributions claimed
+1. **A pocket model with no external dependencies.** Candidates, features, network and ranker all come from the
+   structure alone; no P2Rank, fpocket or Java at training or inference. The native generator reaches a **0.977**
+   candidate ceiling on 1367 RCSB structures at 30 candidates per structure.
+2. **Geometric tensor attention for binding-site detection.** Degree-0/1/2 Cartesian channels with invariant-gated
+   tensor messages (GotenNet-style), applied to pockets for the first time, with the equivariant-vs-invariant ablation
+   at equal depth and width that the pocket literature lacks.
+3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
+4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
+   with the property head.
+5. **Peptide-binder sites as a first-class problem**: a groove candidate tier with backbone-exposure features and a
+   homology-controlled peptide-site benchmark built from RCSB (973 complexes, 685 receptor clusters, disjoint from the
+   small-molecule training clusters). First result: cavity candidates already reach a high ceiling on peptide sites, so
+   the limiting factor is ranking, not detection.
+
+## Claims and their falsification tests
+| id | claim | test | fails if |
+|---|---|---|---|
+| C1 | native candidates + learned ranker match or beat fpocket/P2Rank candidates + the same ranker, with no external tool | same 1367 structures, same labels, cluster CV, paired cluster bootstrap | CI of the difference in top-1 or top-(N+2) lies below 0 |
+| C2 | network features raise the ranker | out-of-fold `net_*` features added, paired bootstrap | CI includes 0 |
+| C3 | degree-2 tensor channels beat degree ≤ 1 and the invariant model | ablation grid, 3 seeds, equal depth/width | full − no_tensors CI includes 0 |
+| C4 | probes on cavity points beat no probes (and a sphere-probe variant) | ablation | CI includes 0 |
+| C5 | property classes and the hotspot field beat geometry-only and tabular baselines on held-out clusters | per-class AUROC/AP, ECE, enrichment of ligand atoms in top-k % points, permutation control | no gain |
+| C6 | peptide-specific features (groove shape + backbone exposure) improve peptide-site ranking | peptide benchmark, feature-group ablation | CI of the gain includes 0 |
+| C7 | the model generalises across benchmarks | COACH420, HOLO4K, LIGYSIS, CryptoBench, held-out families, one protocol, train-similar structures separated | macro-average below the re-run baselines |
+
+## Data and splits
+`docs/DATA_CARD.md`. Training: RCSB (CC0), 30 %-identity clusters, 5 cluster folds, 12 held-out families excluded by
+cluster and UniProt. Evaluation: held-out families, COACH420, HOLO4K (DeepPocket ligand rule), LIGYSIS, CryptoBench,
+and the peptide benchmark. Structures sharing a 30 % cluster with training are reported separately as "train-similar".
+
+## Experiments
+- **E1 main table.** DCA and DCC at 4 Å, top-1 / top-3 / top-N / top-(N+2), MRR, ceiling: detector order, geometry
+  baselines, LambdaRank, LambdaRank + network, network alone, fpocket, P2Rank. Cluster bootstrap CI, ≥ 3 seeds.
+- **E2 ablations.** `full`, `no_probes`, `no_surface`, `no_esm`, `no_tensors`, `no_vectors`, `invariant`, `achiral`;
+  and feature-group ablations of the ranker (already measured for the ranker: chemistry is the largest group).
+- **E3 properties and hotspots.** Per-class AUROC/AP, ECE, reliability curves; enrichment of true ligand atoms in the
+  top-k % of field points with a permutation control.
+- **E4 peptide sites.** Ceiling by tier, ranking with and without the peptide feature group, per-receptor-family breakdown.
+- **E5 failure analysis.** Apo vs holo, cryptic sites, multi-site proteins, large ligands, membrane proteins, metals.
+- **E6 robustness.** Predicted (AlphaFold) structures, protein-only input, rotation averaging at test time.
+- **E7 cost.** Seconds per structure and memory for each stage (the native generator is 3.6 s per structure per core).
+
+## Figures and tables
+F1 pipeline and the three outputs. F2 the equivariant layer (degrees, messages, gates). F3 split and leakage design.
+F4 main curves. F5 ablation bars. F6 qualitative pockets with hotspot fields, including one peptide groove.
+F7 failure cases. T1 data. T2 main metrics. T3 ablations. T4 peptide benchmark. T5 licences and scope.
+
+## Current status of the tables
+| table | status |
+|---|---|
+| T1 data | done (manifests built) |
+| T2 main | partial: native + ranker + geometry baselines measured; fpocket / P2Rank running; network **not trained** |
+| T3 ablations | ranker feature groups measured; network ablations need a GPU |
+| T4 peptide | candidate tiers measured on a probe; full table in progress |
+| T5 licences | done (`docs/DATA_CARD.md`, `docs/PROVENANCE.md`) |
+
+## Venues
+J. Cheminformatics or J. Chem. Inf. Model. (methods); Bioinformatics (application note); an ML4Science workshop for the
+equivariance ablation alone. Preprint once C1 and C3 are reproduced with ≥ 3 seeds.
+
+## Honesty rules
+Report what was not run. Never publish numbers from an unconverged run. Scores are computational hypotheses, not
+measured affinity or activity. If C2 or C3 fail, the paper is C1 + C5 + C6 with a negative-result section on
+high-degree channels — which is itself a contribution, since the ablation is missing from the literature.
