@@ -22,7 +22,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-from equicave import detect, pocket_features as pf, pockets as pk, structure  # noqa: E402
+from equicave import detect, pocket_features as pf, pockets as pk, structure, tables  # noqa: E402
 
 
 def n_sites(copies, link=8.0):
@@ -127,8 +127,8 @@ def main():
     sm = pd.concat(prev_summ + [pd.DataFrame(summ)], ignore_index=True) if (prev_summ or summ) else pd.DataFrame()
     if df.empty:
         sys.exit("no candidates produced")
-    df.to_csv(out / f"candidates_{a.tag}.csv", index=False)
-    sm.to_csv(out / f"structures_{a.tag}.csv", index=False)
+    tables.write_table(df, out, f"candidates_{a.tag}")
+    tables.write_table(sm, out, f"structures_{a.tag}", compressed=False)
     (out / f"candidates_{a.tag}.geometry.json").write_text(json.dumps(dict(pf.geometry(), **params), indent=1))
     if not a.keep_chunks:
         for f in chunk_dir.glob("*.csv"):

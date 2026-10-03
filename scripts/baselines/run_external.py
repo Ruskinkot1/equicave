@@ -13,7 +13,7 @@ import pandas as pd
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts/train"))
-from equicave import pockets as pk, structure  # noqa: E402
+from equicave import pockets as pk, structure, tables  # noqa: E402
 from build_native import n_sites  # noqa: E402
 
 ENV = dict(os.environ, JAVA_TOOL_OPTIONS=os.environ.get("JAVA_TOOL_OPTIONS", ""))
@@ -113,7 +113,7 @@ def main():
         for r, raw, prot in items:
             rows += label(res.get(r["pdb"], []), r["pdb"], raw, {l[0] for l in json.loads(r["ligands"])}, dict(cluster30=r["cluster30"], fold=int(r["fold"])))
     df = pd.DataFrame(rows)
-    out = REPO / "data/processed" / f"candidates_{a.tool}.csv"; df.to_csv(out, index=False)
+    out = tables.write_table(df, REPO / "data/processed", f"candidates_{a.tool}")
     g = df.groupby("pdb")
     print(f"{len(df)} candidates in {g.ngroups} structures; ceiling {(g['label'].max() == 1).mean():.3f}; mean candidates {len(df) / g.ngroups:.1f}; "
           f"top-1 by tool order {(df[df.tool_rank == 1].groupby('pdb')['label'].max() == 1).sum() / g.ngroups:.3f}")

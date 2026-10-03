@@ -24,7 +24,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-from equicave import detect, peptide as PEP, pocket_features as pf, pockets as pk, structure  # noqa: E402
+from equicave import detect, peptide as PEP, pocket_features as pf, pockets as pk, structure, tables  # noqa: E402
 
 
 def one(task):
@@ -141,7 +141,7 @@ def main():
         for f in chunk_dir.glob("*.csv"):
             f.unlink()
         chunk_dir.rmdir()
-    df.to_csv(out / f"candidates_{a.tag}.csv", index=False); sm.to_csv(out / f"structures_{a.tag}.csv", index=False)
+    tables.write_table(df, out, f"candidates_{a.tag}"); tables.write_table(sm, out, f"structures_{a.tag}", compressed=False)
     (out / f"candidates_{a.tag}.geometry.json").write_text(json.dumps(dict(pf.geometry(), **params,
         GROOVE_MIN_BURIED=PEP.GROOVE_MIN_BURIED, SEG_LEN=PEP.SEG_LEN, PEAK_NMS=PEP.PEAK_NMS), indent=1))
     ok = sm[sm.status == "ok"]

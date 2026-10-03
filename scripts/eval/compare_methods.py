@@ -18,7 +18,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/train"))
-from equicave import metrics as M, pocket_features as pf  # noqa: E402
+from equicave import metrics as M, pocket_features as pf, tables  # noqa: E402
 from train_ranker import cv_scores  # noqa: E402
 
 
@@ -29,19 +29,20 @@ def main():
     ap.add_argument("--ranker-tag", default="native"); ap.add_argument("--out", default=str(REPO / "docs/results"))
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
-    tables = {}
+    loaded = {}
     for spec in a.tags:
         tag, order = spec.split(":")
-        f = ds / f"candidates_{tag}.csv"
-        if not f.exists():
-            print(f"  {f.name} missing, skipped"); continue
-        tables[tag] = (pd.read_csv(f), order)
-    if not tables:
+        try:
+            df_t = tables.read_table(ds, f"candidates_{tag}")
+        except FileNotFoundError as ex:
+            print(f"  {ex}; skipped"); continue
+        loaded[tag] = (df_t, order)
+    if not loaded:
         sys.exit("no candidate tables")
-    common = set.intersection(*[set(df["pdb"]) for df, _ in tables.values()])
-    print(f"{len(common)} structures present in all of {sorted(tables)}")
+    common = set.intersection(*[set(df["pdb"]) for df, _ in loaded.values()])
+    print(f"{len(common)} structures present in all of {sorted(loaded)}")
     rows, results, ref_per = [], {}, None
-    for tag, (df, order) in tables.items():
+    for tag, (df, order) in loaded.items():
         d = df[df["pdb"].isin(common)].copy()
         if "cluster30" not in d:
             d["cluster30"] = d["pdb"]
@@ -66,7 +67,7 @@ def main():
                                       for c in ("top1", "topN2")}
             results[f"{tag} + LambdaRank"] = st2
     lines = ["# Candidate generators and rankers on the same structures", "",
-             f"{len(common)} structures common to {', '.join(sorted(tables))}; labels, ligand filter and n_sites are identical "
+             f"{len(common)} structures common to {', '.join(sorted(loaded))}; labels, ligand filter and n_sites are identical "
              f"for every method (DCA <= 4 A). Rankers are cross-validated by 30 %-identity cluster with {a.seeds} seeds, so no "
              "structure is scored by a model that saw it. 95 % CI by cluster bootstrap.", "",
              "| method | candidates | ceiling | top-1 | top-3 | top-N | top-(N+2) | MRR |", "|---|---|---|---|---|---|---|---|"]
@@ -82,7 +83,7 @@ def main():
                          f"{p['topN2']['diff']:+.3f} [{p['topN2']['lo']:+.3f}, {p['topN2']['hi']:+.3f}] |")
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / "methods_comparison.md").write_text("\n".join(lines) + "\n")
-    (out / "methods_comparison.json").write_text(json.dumps(dict(n_structures=len(common), tags=list(tables), results=results), indent=1))
+    (out / "methods_comparison.json").write_text(json.dumps(dict(n_structures=len(common), tags=list(loaded), results=results), indent=1))
     print("\n".join(lines))
 
 

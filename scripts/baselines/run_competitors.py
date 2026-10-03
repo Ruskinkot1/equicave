@@ -39,7 +39,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/train")); sys.path.insert(0, str(REPO / "scripts/baselines"))
-from equicave import pockets as pk, structure  # noqa: E402
+from equicave import pockets as pk, structure, tables  # noqa: E402
 from build_native import n_sites  # noqa: E402
 from run_external import protein_only, run_fpocket, run_p2rank_batch  # noqa: E402
 
@@ -135,8 +135,7 @@ def main():
         df = one_tool(tool, items, tw, a.jobs)
         if df.empty:
             continue
-        out = REPO / "data/processed" / f"candidates_{tool}{a.suffix}.csv"
-        df.to_csv(out, index=False)
+        out = tables.write_table(df, REPO / "data/processed", f"candidates_{tool}{a.suffix}")
         g = df.groupby("pdb")
         print(f"  {tool}: {len(df)} candidates in {g.ngroups} structures -> {out.name}; ceiling "
               f"{(g['label'].max() == 1).mean():.3f}; mean candidates {len(df) / g.ngroups:.1f}; "

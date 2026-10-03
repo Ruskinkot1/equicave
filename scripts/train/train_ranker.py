@@ -29,7 +29,7 @@ import lightgbm as lgb
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-from equicave import metrics as M, pocket_features as pf  # noqa: E402
+from equicave import metrics as M, pocket_features as pf, tables  # noqa: E402
 
 PARAMS = dict(objective="lambdarank", metric="ndcg", eval_at=[1, 3], learning_rate=0.05, num_leaves=31, min_data_in_leaf=20,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1, num_threads=4,
@@ -107,7 +107,7 @@ def main():
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
-    df = pd.read_csv(ds / f"candidates_{a.tag}.csv").reset_index(drop=True)
+    df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
     geo = json.loads((ds / f"candidates_{a.tag}.geometry.json").read_text())
     feats = list(pf.FEATURES) + ([f for f in pf.PEPTIDE if f in df] if a.tag == "peptide" else [])
     if a.features_extra == "net":
