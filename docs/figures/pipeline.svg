@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 420" font-family="DejaVu Sans, Arial" font-size="13">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#44505f"/>
+    </marker>
+    <style>
+      .box{fill:#f4f6f8;stroke:#44505f;stroke-width:1.2}
+      .acc{fill:#e8f3f1;stroke:#1f9e8f;stroke-width:1.4}
+      .out{fill:#fdf3e3;stroke:#d99a2b;stroke-width:1.4}
+      .t{fill:#1b2430}.s{fill:#5b6775;font-size:11px}.h{font-size:14px;font-weight:bold;fill:#1b2430}
+      .ar{stroke:#44505f;stroke-width:1.2;fill:none;marker-end:url(#a)}
+      rect{rx:6}
+    </style>
+  </defs>
+
+  <text x="20" y="26" class="h">1. Candidate generation (geometry only, no external tool)</text>
+  <rect class="box" x="20" y="38" width="150" height="62"/>
+  <text x="30" y="58" class="t">structure</text><text x="30" y="74" class="s">heavy atoms, all chains</text><text x="30" y="90" class="s">no sequence, no finder</text>
+  <path class="ar" d="M172,69 L205,69"/>
+  <rect class="box" x="207" y="38" width="160" height="62"/>
+  <text x="217" y="58" class="t">1 A lattice</text><text x="217" y="74" class="s">free: &#8805; 3 A from atoms</text><text x="217" y="90" class="s">wall: &lt; 2 A from atoms</text>
+  <path class="ar" d="M369,69 L402,69"/>
+  <rect class="box" x="404" y="38" width="170" height="62"/>
+  <text x="414" y="58" class="t">buriedness b(p)</text><text x="414" y="74" class="s">of 26 lattice rays, how many</text><text x="414" y="90" class="s">meet protein within 8 A</text>
+  <path class="ar" d="M576,69 L609,69"/>
+  <rect class="box" x="611" y="38" width="175" height="62"/>
+  <text x="621" y="58" class="t">cavities and peaks</text><text x="621" y="74" class="s">components of b &#8805; 16, split</text><text x="621" y="90" class="s">at smoothed peaks, NMS 6 A</text>
+  <path class="ar" d="M788,69 L821,69"/>
+  <rect class="acc" x="823" y="38" width="175" height="62"/>
+  <text x="833" y="58" class="t">&#8804; 30 candidates</text><text x="833" y="74" class="s">tier 1 deep, tier 2 shallow,</text><text x="833" y="90" class="s">tier 3 groove (peptides)</text>
+
+  <text x="20" y="146" class="h">2. EquiCave-Net: SO(3)-equivariant multi-task network</text>
+  <rect class="box" x="20" y="158" width="190" height="104"/>
+  <text x="30" y="178" class="t">nodes (three types)</text>
+  <text x="30" y="196" class="s">residues at CA + ESM-2</text>
+  <text x="30" y="212" class="s">probes on cavity points</text>
+  <text x="30" y="228" class="s">SAS surface points</text>
+  <text x="30" y="250" class="s">edges: 9 ordered type pairs</text>
+  <path class="ar" d="M212,210 L245,210"/>
+  <rect class="acc" x="247" y="158" width="245" height="104"/>
+  <text x="257" y="178" class="t">geometric tensor attention</text>
+  <text x="257" y="196" class="s">x &#8712; R^F,  V &#8712; R^(F&#215;3),  T &#8712; R^(F&#215;3&#215;3)</text>
+  <text x="257" y="213" class="s">invariants: &#10216;V,u&#10217;, u&#7488;Tu, ||V||, ||T||, RBF(d)</text>
+  <text x="257" y="230" class="s">messages: gate &#8857; {V, u, Tu, uu&#7488;&#8722;I/3, sym(V,u)}</text>
+  <text x="257" y="252" class="s">4-5 layers, attention over incoming edges</text>
+  <path class="ar" d="M494,210 L527,210"/>
+  <rect class="out" x="529" y="158" width="250" height="104"/>
+  <text x="539" y="178" class="t">heads</text>
+  <text x="539" y="196" class="s">residue / probe segmentation (Dice + BCE)</text>
+  <text x="539" y="213" class="s">site centre: equivariant offset, set loss</text>
+  <text x="539" y="230" class="s">pocket properties (14, multi-label)</text>
+  <text x="539" y="252" class="s">hotspot field (7 classes, focal BCE)</text>
+
+  <text x="20" y="306" class="h">3. Hybrid ranking</text>
+  <rect class="box" x="20" y="318" width="305" height="84"/>
+  <text x="30" y="338" class="t">109 candidate features</text>
+  <text x="30" y="356" class="s">native (8) &#183; cavity shape (18) &#183; composition (14)</text>
+  <text x="30" y="373" class="s">interaction partners in 5/8/12 A shells (46)</text>
+  <text x="30" y="390" class="s">interaction potential per point (21) &#183; context (2)</text>
+  <path class="ar" d="M327,360 L360,360"/>
+  <rect class="box" x="362" y="318" width="215" height="84"/>
+  <text x="372" y="338" class="t">+ network scores</text>
+  <text x="372" y="356" class="s">out-of-fold occupancy, centre</text>
+  <text x="372" y="373" class="s">confidence, hotspot mean</text>
+  <text x="372" y="390" class="s">(one model per cluster fold)</text>
+  <path class="ar" d="M579,360 L612,360"/>
+  <rect class="acc" x="614" y="318" width="205" height="84"/>
+  <text x="624" y="338" class="t">LightGBM LambdaRank</text>
+  <text x="624" y="356" class="s">graded relevance (2 A / 4 A)</text>
+  <text x="624" y="373" class="s">within-structure z-scores</text>
+  <text x="624" y="390" class="s">seed ensemble, isotonic calibration</text>
+  <path class="ar" d="M821,360 L854,360"/>
+  <rect class="out" x="856" y="318" width="205" height="84"/>
+  <text x="866" y="338" class="t">outputs</text>
+  <text x="866" y="356" class="s">ranked sites (DCA/DCC, top-N)</text>
+  <text x="866" y="373" class="s">property classes per site</text>
+  <text x="866" y="390" class="s">hotspot field inside the pocket</text>
+
+  <path class="ar" d="M910,104 L910,154"/>
+  <text x="918" y="132" class="s">probe positions</text>
+  <path class="ar" d="M700,266 L660,314"/>
+  <text x="664" y="292" class="s">scores</text>
+  <path class="ar" d="M120,104 L120,154"/>
+  <text x="128" y="132" class="s">structure</text>
+</svg>

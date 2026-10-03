@@ -39,13 +39,54 @@ SHELL = [f"{t}_{int(r)}" for r in SHELLS for t in ("donor", "acceptor", "cation"
         [f"f_{t}_{int(r)}" for r in SHELLS for t in ("donor", "acceptor", "cation", "anion", "aromatic", "hydrophobic")] + \
         ["kd_mean", "kd_sum", "bfac_mean", "bfac_std", "n_res_5", "n_res_12", "hb_balance", "charge_balance",
          "polar_apolar_ratio", "donor_acceptor_per_volume"]
+# interaction potential: for each cavity point, which interaction a ligand atom placed there could actually make
+POT_CLASSES = ("hbd", "hba", "hydrophobic", "aromatic", "cation", "anion", "halogen")
+POTENTIAL = [f"pot_f_{c}" for c in POT_CLASSES] + [f"pot_n_{c}" for c in POT_CLASSES] + \
+            ["pot_classes_mean", "pot_f_multi2", "pot_f_multi3", "pot_f_polar_apolar", "pot_f_hbd_hba",
+             "pot_best_point_classes", "pot_volume_multi3"]
 CONTEXT = ["prot_n_res", "n_cands"]
-FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + CONTEXT
+FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + POTENTIAL + CONTEXT
 NET_FEATURES = ["net_seg", "net_center_conf", "net_hot_mean"]          # appended when a network model scores the sites
 PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
-GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, context=CONTEXT,
-              network=NET_FEATURES, peptide=PEPTIDE)
+GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, potential=POTENTIAL,
+              context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE)
+
+
+def interaction_potential(points: np.ndarray, trees: dict, max_points: int = 200, seed: int = 0) -> dict:
+    """What a ligand atom could bind to at each cavity point, summarised over the cavity.
+
+    The same geometric criteria as the hotspot labels (`labels.interaction_classes`), but asked of the *empty* point
+    instead of a ligand atom: is there a receptor acceptor within 3.5 A (so a donor placed here would be satisfied),
+    a donor within 3.5 A, a hydrophobic carbon within 4.5 A, an aromatic ring atom within 5.5 A, an anion or a cation
+    within 4.0 A, an acceptor within 3.8 A for a halogen. A physics-free prior that separates a plausible binding site
+    from empty space, and the geometric counterpart of the learned hotspot field.
+    """
+    from . import labels as LB
+    pts = np.atleast_2d(np.asarray(points, float))
+    if len(pts) == 0:
+        return {f: 0.0 for f in POTENTIAL}
+    n_total = len(pts)
+    if n_total > max_points:
+        pts = pts[np.random.default_rng(seed).permutation(n_total)[:max_points]]
+    spec = [("hbd", "acceptor", LB.HBOND_D), ("hba", "donor", LB.HBOND_D), ("hydrophobic", "hydrophobic", LB.HYDROPHOBIC_D),
+            ("aromatic", "aromatic", LB.AROMATIC_D), ("cation", "anion", LB.SALT_D), ("anion", "cation", LB.SALT_D),
+            ("halogen", "acceptor", LB.HALOGEN_D)]
+    avail = {}
+    for name, partner, d in spec:
+        tr = trees.get(partner)
+        avail[name] = (tr.query(pts, distance_upper_bound=d)[0] <= d) if tr is not None else np.zeros(len(pts), bool)
+    n_cls = np.stack([avail[n] for n, _, _ in spec], 1).sum(1)
+    out = {f"pot_f_{n}": float(avail[n].mean()) for n, _, _ in spec}
+    out.update({f"pot_n_{n}": float(avail[n].sum()) for n, _, _ in spec})
+    out["pot_classes_mean"] = float(n_cls.mean())
+    out["pot_f_multi2"] = float((n_cls >= 2).mean())
+    out["pot_f_multi3"] = float((n_cls >= 3).mean())
+    out["pot_f_polar_apolar"] = float(((avail["hbd"] | avail["hba"]) & avail["hydrophobic"]).mean())
+    out["pot_f_hbd_hba"] = float((avail["hbd"] & avail["hba"]).mean())
+    out["pot_best_point_classes"] = float(n_cls.max())
+    out["pot_volume_multi3"] = float((n_cls >= 3).mean() * n_total)
+    return out
 
 
 def featurize(cands: list[dict], st: dict, radius: float = CAV_R) -> list[dict]:
@@ -91,8 +132,9 @@ def featurize(cands: list[dict], st: dict, radius: float = CAV_R) -> list[dict]:
         d8, a8 = shell["donor_8"], shell["acceptor_8"]
         pos8, neg8 = shell["cation_8"], shell["anion_8"]
         vol = max(1.0, float(len(cav)))
+        pot = interaction_potential(cpts if len(cpts) else cav, trees)
         rows.append(dict(
-            center=c["center"], **{k: t[k] for k in NATIVE}, n_cands=t["n_cands"], **shell,
+            center=c["center"], **{k: t[k] for k in NATIVE}, n_cands=t["n_cands"], **shell, **pot,
             cav_volume=float(len(cav)), ax1=ax[0], ax2=ax[1], ax3=ax[2],
             buried_mean=float(bur_sub.mean()) if len(bur_sub) else 0.0,
             bur_std=float(cbur.std()) if len(cbur) else 0.0,
