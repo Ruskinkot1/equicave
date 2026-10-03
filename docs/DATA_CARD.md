@@ -22,8 +22,8 @@ third-party databases are **never** committed (`.gitignore`); every one of them 
 | wwPDB Chemical Component Dictionary | ligand atom and ligand class labels | CC0 | [проверено] fetched from files.rcsb.org/ligands |
 | ESM-2 (`facebook/esm2_t12_35M_UR50D`, `esm2_t33_650M_UR50D`) | frozen residue embeddings | MIT | [из памяти] — recheck the model card before release |
 | rdk/p2rank-datasets (COACH420, HOLO4K id lists) | evaluation lists | **no licence file found** | [проверено] no LICENSE in the repository tree; ids only, cited, not redistributed here |
-| LIGYSIS (Zenodo 13121414) | evaluation | CC-BY-4.0 (Zenodo metadata) | [проверено] record metadata read; files are pandas pickles, parsed locally, not committed |
-| CryptoBench | cryptic-site evaluation | repository not reachable from this environment | [не найдено] — the user downloads it and places the list in `data/external/eval_sets/cryptobench.csv` |
+| LIGYSIS (Zenodo 13121414) | evaluation: 3448 chains | CC-BY-4.0 (Zenodo metadata) | [проверено] record metadata read; the chain list is a pandas pickle, read with a restricted unpickler that refuses anything outside numpy/pandas reconstruction, and not committed |
+| CryptoBench (OSF 10.17605/OSF.IO/PZ4A9) | cryptic-site evaluation: 5493 apo entries, 1100 in the held-out test fold | OSF project; licence file in the GitHub repository | [проверено] annotation JSON fetched 2026-10-03; the 1.1 GB CIF archive is not downloaded, structures come from RCSB |
 | PepBDB, Propedia | candidate external peptide-site sets | web databases with their own terms | not used; the peptide benchmark is built from RCSB instead |
 | BioLiP | possible training extension | no machine-readable licence ("freely available") | not used for the shipped model; a model trained on it would be labelled non-commercial scope |
 | fpocket, P2Rank | optional baselines only | MIT | [из памяти] — recheck before release; both built/downloaded locally, never imported by `src/` or `training/` |
