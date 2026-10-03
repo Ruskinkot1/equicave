@@ -136,3 +136,64 @@ def write_pdb(path, xyz, element="C", resname="UNK", record="HETATM", resseq: in
              for i, ((x, y, z)) in enumerate(xyz)]
     Path(path).write_text("\n".join(lines) + "\nEND\n")
     return Path(path)
+
+
+# ---- short polymer chains as peptide ligands ----------------------------------------------------------------------
+def chain_lengths(path, model: int = 1) -> dict[str, int]:
+    """Residues per chain from ATOM records (one model), for telling receptors from peptide chains."""
+    seen: dict[str, set] = {}
+    cur = 1
+    for line in Path(path).read_text(errors="ignore").splitlines():
+        if line[:6] == "MODEL ":
+            cur = int(line[10:14]); continue
+        if line[:6] == "ENDMDL" and cur >= model:
+            break
+        if cur != model or not (line[:4] == "ATOM" or (line[:6] == "HETATM" and line[17:20].strip() in ("MSE", "SEC"))):
+            continue
+        seen.setdefault(line[21], set()).add(line[22:27].strip())
+    return {c: len(r) for c, r in seen.items()}
+
+
+def read_peptide_ligands(path, min_res: int = 3, max_res: int = 30, min_heavy: int = 8, model: int = 1,
+                         receptor_min_res: int = 50) -> list[dict]:
+    """Short polymer chains that act as peptide ligands of a longer receptor chain in the same file.
+
+    A chain qualifies when it has `min_res`..`max_res` residues, at least `min_heavy` heavy atoms, the file also holds a
+    chain of at least `receptor_min_res` residues, and the chain lies within 5 A of that receptor. Returned in the same
+    record format as `read_ligands` (comp = 'PEP:<chain>', xyz, element, atom) plus `n_res`, `seq` and `chain`.
+    """
+    import numpy as _np
+    lens = chain_lengths(path, model)
+    if not any(n >= receptor_min_res for n in lens.values()):
+        return []
+    short = {c for c, n in lens.items() if min_res <= n <= max_res}
+    long_ = {c for c, n in lens.items() if n >= receptor_min_res}
+    if not short:
+        return []
+    st = read_pdb(path, model=model)
+    out = []
+    rec = st["xyz"][_np.isin(st["chain"], list(long_))]
+    if len(rec) == 0:
+        return []
+    from scipy.spatial import cKDTree as _KD
+    tree = _KD(rec)
+    for c in sorted(short):
+        m = st["chain"] == c
+        if m.sum() < min_heavy:
+            continue
+        xyz = st["xyz"][m]
+        if tree.query(xyz)[0].min() > 5.0:
+            continue
+        sub = {k: st[k][m] for k in ("xyz", "element", "atom", "resname", "resid")}
+        order, rn = [], []
+        for r, n in zip(sub["resid"], sub["resname"]):
+            if r not in order:
+                order.append(r); rn.append(n)
+        out.append(dict(comp=f"PEP:{c}", chain=c, resseq="", xyz=xyz, element=sub["element"], atom=sub["atom"],
+                        n_res=len(order), seq="".join(AA3.get(str(x), "X") for x in rn), is_peptide=True))
+    return out
+
+
+def receptor_chains(path, receptor_min_res: int = 50, model: int = 1) -> str:
+    """Chain ids of the chains long enough to be the receptor (used to exclude peptide chains from the protein input)."""
+    return "".join(c for c, n in chain_lengths(path, model).items() if n >= receptor_min_res)

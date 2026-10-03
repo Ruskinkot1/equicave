@@ -1,0 +1,44 @@
+# EquiCave-Net default configuration (A100: dim 128, layers 5, esm2_t33_650M; CPU pilot: see pockets_net_cpu.yaml)
+data:
+  manifest: data/processed/manifest.csv
+  pdb_dir: data/pockets_ds/pdb
+  cache_dir: data/cache/net
+  esm: facebook/esm2_t33_650M_UR50D     # null = no ESM-2 (ablation)
+  n_probe: 768
+  n_surf: 512
+  limit: 0
+split:
+  val_fold: 0                            # 5-fold CV by cluster: run once per fold
+model:
+  dim: 128
+  layers: 5
+  heads: 8
+  n_rbf: 32
+  cutoff: 10.0
+  equivariant: true
+  use_vectors: true
+  use_tensors: true
+  chiral: true
+  use_surface: true
+  use_probes: true
+  dropout: 0.1
+loss:
+  w_res: 1.0
+  w_occ: 1.0
+  w_center: 0.5
+  w_conf: 0.5
+  w_hot: 1.0
+  w_prop: 0.5
+  occ_pos_weight: 3.0
+  res_pos_weight: 3.0
+optim:
+  lr: 0.0005
+  weight_decay: 0.01
+  epochs: 60
+  accumulate: 4
+  warmup_epochs: 2
+  ema: 0.999
+  patience: 10
+  seed: 0
+  rotate: true
+  amp: bf16

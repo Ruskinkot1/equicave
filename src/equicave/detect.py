@@ -11,6 +11,8 @@ Algorithm (all on the absolute 1 A lattice of `pockets.free_grid`):
    radius `nms` (default 6 A). Every cavity point goes to its nearest peak.
 5. A candidate = one peak group with at least `min_points` points. Score = sum of buriedness over its points;
    centre = buriedness-weighted centroid. Candidates are returned best-first, at most `max_sites`.
+6. Two tiers: deep cavities (>= DETECT_MIN_BURIED) first; remaining slots are filled by shallower cavities
+   (>= FILL_MIN_BURIED) that are not within `nms` of a deep candidate.
 
 Only coordinates are used: no sequence, no finder scores, no external program.
 """
@@ -22,7 +24,8 @@ from scipy.spatial import cKDTree
 
 from . import pockets as pk
 
-DETECT_MIN_BURIED = 14   # of 26 rays: cavity points for candidate detection (deeper than the cavity-mask MIN_BURIED)
+DETECT_MIN_BURIED = 16   # of 26 rays: cavity points for candidate detection (deeper than the cavity-mask MIN_BURIED)
+FILL_MIN_BURIED = 10     # of 26 rays: second tier; shallower cavities fill the remaining slots (0 = off)
 NMS_RADIUS = 6.0         # A: minimum separation between sub-site peaks
 MIN_POINTS = 12          # lattice points: smallest candidate that is kept
 MAX_SITES = 30
@@ -66,11 +69,14 @@ def lattice(xyz: np.ndarray, step: float = pk.GRID, margin: float = 4.0):
 
 def detect_sites(xyz: np.ndarray, step: float = pk.GRID, clash: float = pk.CLASH, min_buried: int = DETECT_MIN_BURIED,
                  nms: float = NMS_RADIUS, min_points: int = MIN_POINTS, max_sites: int = MAX_SITES,
-                 return_field: bool = False) -> list[dict] | tuple[list[dict], dict]:
+                 fill_min_buried: int = FILL_MIN_BURIED, return_field: bool = False) -> list[dict] | tuple[list[dict], dict]:
     """Candidate binding sites of one protein (heavy-atom coordinates only). Best-first, at most `max_sites`.
 
+    Two tiers: deep cavities (buriedness >= `min_buried`) come first, ordered by score; if slots remain, cavities of the
+    shallower field (>= `fill_min_buried`) whose centre is farther than `nms` from every deep candidate are appended,
+    also by score. `tier` in the record says which one produced the candidate.
     Each candidate: dict(center [3], peak [3], points [n,3], buried [n] (per point), score, n_points, mean_buried,
-    max_buried, cavity (id of the parent connected cavity), cavity_points (size of that cavity), rank).
+    max_buried, cavity (id of the parent connected cavity), cavity_points (size of that cavity), tier, rank).
     With `return_field=True` the lattice (origin, shape, free mask, buriedness) is returned too.
     """
     xyz = np.asarray(xyz, float)
@@ -80,11 +86,30 @@ def detect_sites(xyz: np.ndarray, step: float = pk.GRID, clash: float = pk.CLASH
     free = dist >= clash
     occupied = dist < pk.RAY_HIT
     bur = buriedness_grid(occupied, step)
+    field = dict(origin=lo, shape=shape, free=free, buried=bur, dist=dist)
+    cands = _split_cavities(lo, step, free, bur, min_buried, nms, min_points, tier=1)
+    cands.sort(key=lambda c: -c["score"])
+    cands = cands[:max_sites]
+    if fill_min_buried and 0 < fill_min_buried < min_buried and len(cands) < max_sites:
+        extra = _split_cavities(lo, step, free, bur, fill_min_buried, nms, min_points, tier=2)
+        extra.sort(key=lambda c: -c["score"])
+        have = np.array([c["center"] for c in cands]).reshape(-1, 3)
+        for c in extra:
+            if len(cands) >= max_sites:
+                break
+            if len(have) == 0 or np.linalg.norm(have - c["center"], axis=1).min() > nms:
+                cands.append(c); have = np.vstack([have, c["center"]])
+    for r, c in enumerate(cands, 1):
+        c["rank"] = r
+    return (cands, field) if return_field else cands
+
+
+def _split_cavities(lo, step, free, bur, min_buried, nms, min_points, tier):
+    """Connected cavities of `free & bur >= min_buried`, split into peak groups (NMS). Unordered list of candidates."""
     cav = free & (bur >= min_buried)
     lab, n_lab = ndimage.label(cav, structure=np.ones((3, 3, 3)))
-    field = dict(origin=lo, shape=shape, free=free, buried=bur, dist=dist, labels=lab)
     if n_lab == 0:
-        return ([], field) if return_field else []
+        return []
     smooth = ndimage.gaussian_filter((bur * cav).astype(float), SMOOTH_SIGMA / step)
     cands = []
     sizes = ndimage.sum(cav, lab, index=np.arange(1, n_lab + 1))
@@ -113,12 +138,8 @@ def detect_sites(xyz: np.ndarray, step: float = pk.GRID, clash: float = pk.CLASH
             w = b[m]
             cands.append(dict(center=(pts[m] * w[:, None]).sum(0) / w.sum(), peak=pts[p], points=pts[m], buried=w,
                               score=float(w.sum()), n_points=int(m.sum()), mean_buried=float(w.mean()),
-                              max_buried=float(w.max()), cavity=int(cid), cavity_points=int(sizes[cid - 1])))
-    cands.sort(key=lambda c: -c["score"])
-    cands = cands[:max_sites]
-    for r, c in enumerate(cands, 1):
-        c["rank"] = r
-    return (cands, field) if return_field else cands
+                              max_buried=float(w.max()), cavity=int(cid), cavity_points=int(sizes[cid - 1]), tier=tier))
+    return cands
 
 
 def candidate_table(cands: list[dict]) -> list[dict]:
@@ -129,5 +150,6 @@ def candidate_table(cands: list[dict]) -> list[dict]:
         rows.append(dict(rank=c["rank"], center=[round(float(x), 2) for x in c["center"]],
                          nat_score=c["score"], nat_rank=c["rank"], nat_rel=c["score"] / mx, nat_npts=c["n_points"],
                          nat_mean_bur=c["mean_buried"], nat_max_bur=c["max_buried"], nat_cavity_npts=c["cavity_points"],
+                         nat_tier=c["tier"],
                          n_cands=len(cands)))
     return rows

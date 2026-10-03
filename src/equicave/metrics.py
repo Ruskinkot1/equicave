@@ -1,0 +1,100 @@
+"""Metrics for ranking, classification, calibration and hotspot enrichment; bootstrap by cluster.
+
+Ranking (per structure): a candidate hits when DCA <= 4 A (or DCC <= 4 A). top-k = any hit in the first k;
+top-N = first n_sites; top-(N+2) = first n_sites + 2 (the DeepPocket / P2Rank convention). A structure whose
+candidates contain no hit counts as a miss for every method (the ceiling is reported separately).
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+def per_structure(df: pd.DataFrame, score_col: str, label_col: str = "label", ks=(1, 3, 5)) -> pd.DataFrame:
+    rows = []
+    for pdb, g in df.groupby("pdb", sort=False):
+        g = g.sort_values(score_col, ascending=False, kind="stable")
+        lab = g[label_col].to_numpy().astype(bool)
+        n = int(g["n_sites"].iloc[0]) if "n_sites" in g else 1
+        first = int(np.argmax(lab)) + 1 if lab.any() else None
+        rows.append(dict(pdb=pdb, cluster30=g["cluster30"].iloc[0] if "cluster30" in g else pdb,
+                         **{f"top{k}": bool(lab[:k].any()) for k in ks},
+                         topN=bool(lab[:n].any()), topN2=bool(lab[:n + 2].any()), first=first,
+                         mrr=(1.0 / first) if first else 0.0, ceiling=bool(lab.any())))
+    return pd.DataFrame(rows)
+
+
+def boot_ci(values: np.ndarray, clusters: np.ndarray, n: int = 2000, seed: int = 0) -> tuple[float, float, float]:
+    """Mean and 95 % percentile CI of `values`, resampling whole clusters."""
+    rng = np.random.default_rng(seed)
+    groups = pd.Series(values).groupby(pd.Series(clusters)).apply(np.asarray).tolist()
+    est = [np.concatenate([groups[i] for i in rng.integers(0, len(groups), len(groups))]).mean() for _ in range(n)]
+    return float(np.mean(values)), float(np.percentile(est, 2.5)), float(np.percentile(est, 97.5))
+
+
+def paired_boot(a: np.ndarray, b: np.ndarray, clusters: np.ndarray, n: int = 2000, seed: int = 0) -> dict:
+    """Paired cluster bootstrap of the difference a - b (same structures, same order): mean, CI, one-sided p."""
+    rng = np.random.default_rng(seed)
+    d = np.asarray(a, float) - np.asarray(b, float)
+    groups = pd.Series(d).groupby(pd.Series(clusters)).apply(np.asarray).tolist()
+    est = np.array([np.concatenate([groups[i] for i in rng.integers(0, len(groups), len(groups))]).mean() for _ in range(n)])
+    return dict(diff=float(d.mean()), lo=float(np.percentile(est, 2.5)), hi=float(np.percentile(est, 97.5)),
+                p_le_0=float((est <= 0).mean()))
+
+
+def auroc(y: np.ndarray, s: np.ndarray) -> float:
+    y = np.asarray(y, bool); s = np.asarray(s, float)
+    if y.all() or (~y).all():
+        return float("nan")
+    from sklearn.metrics import roc_auc_score
+    return float(roc_auc_score(y, s))
+
+
+def average_precision(y: np.ndarray, s: np.ndarray) -> float:
+    y = np.asarray(y, bool)
+    if not y.any():
+        return float("nan")
+    from sklearn.metrics import average_precision_score
+    return float(average_precision_score(y, s))
+
+
+def ece(y: np.ndarray, p: np.ndarray, bins: int = 10) -> float:
+    """Expected calibration error with equal-width probability bins."""
+    y = np.asarray(y, float); p = np.asarray(p, float)
+    edges = np.linspace(0, 1, bins + 1); out = 0.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (p >= lo) & (p < hi if hi < 1 else p <= hi)
+        if m.any():
+            out += m.mean() * abs(y[m].mean() - p[m].mean())
+    return float(out)
+
+
+def enrichment_at(y: np.ndarray, s: np.ndarray, frac: float = 0.1) -> float:
+    """Fraction of positives among the top `frac` of points divided by the base rate (1 = random)."""
+    y = np.asarray(y, bool); s = np.asarray(s, float)
+    if not y.any() or len(y) == 0:
+        return float("nan")
+    k = max(1, int(round(frac * len(y))))
+    top = np.argsort(-s)[:k]
+    return float(y[top].mean() / y.mean())
+
+
+def permutation_control(y: np.ndarray, s: np.ndarray, fn, n: int = 100, seed: int = 0) -> tuple[float, float]:
+    """Metric `fn(y, s)` against the distribution of the same metric with shuffled scores: (observed, p-value)."""
+    rng = np.random.default_rng(seed)
+    obs = fn(y, s)
+    null = np.array([fn(y, rng.permutation(s)) for _ in range(n)])
+    return float(obs), float((null >= obs).mean())
+
+
+def summarize(per: pd.DataFrame, cols=("top1", "top3", "topN", "topN2", "mrr")) -> dict:
+    out = {}
+    for c in cols:
+        m, lo, hi = boot_ci(per[c].to_numpy(float), per["cluster30"].to_numpy())
+        out[c] = dict(mean=m, lo=lo, hi=hi)
+    out["n"] = int(len(per)); out["ceiling"] = float(per["ceiling"].mean())
+    return out
+
+
+def fmt(stat: dict) -> str:
+    return f"{stat['mean']:.3f} [{stat['lo']:.3f}, {stat['hi']:.3f}]"

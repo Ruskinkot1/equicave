@@ -1,0 +1,10 @@
+# Ablation presets: each entry overrides keys of pockets_net.yaml. Run: python -m training pockets-net --config training/configs/pockets_net.yaml --set ablation=<name>
+ablations:
+  full: {}
+  no_probes: {model.use_probes: false}
+  no_surface: {model.use_surface: false}
+  no_esm: {data.esm: null}
+  no_tensors: {model.use_tensors: false}            # degree <= 1 (vector channels only)
+  no_vectors: {model.use_vectors: false}            # degree 0 only but still gated by edge directions? no: distances only
+  invariant: {model.equivariant: false}             # distances-only GNN, same depth and width
+  achiral: {model.chiral: false}
