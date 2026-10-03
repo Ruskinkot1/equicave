@@ -49,24 +49,35 @@ In `docs/LITERATURE.md`, quoted from the papers and marked as such. They are **n
 different ligand filters, chain handling and splits. The comparison we trust is `scripts/baselines/run_external.py`,
 which re-runs fpocket and P2Rank on our structures with our labels.
 
-## Install and run
+## Install and train
+
 ```bash
-make setup      # pip install -e ".[dev,train,viz]"
-make test       # 30 CPU tests on synthetic data, including exact rotation equivariance
-make data       # RCSB manifest (CC0) + structures          ~20 min
-make candidates # native candidates, features, labels        ~3.6 s/structure/core
-make ranker     # LambdaRank, cluster CV, 5 seeds, ablations ~3 min
-make labels     # property and hotspot label statistics
+make setup                              # pip install -e ".[dev,train,viz]"
+bash scripts/train/train_all.sh         # the whole pipeline; GPU stages are skipped automatically on a CPU
 ```
-GPU (the network, out-of-fold features, ablations):
+`train_all.sh` is restartable (each stage is skipped when its output exists) and takes
+`JOBS=`, `SEEDS=`, `RUNS=`, `NET_CFG=` and `STAGES=` overrides:
+
+| stage | what it does | needs |
+|---|---|---|
+| `data` | RCSB manifest (CC0) and structures | network, ~20 min |
+| `candidates` | native candidates, 88 features, labels | CPU, ~3.6 s/structure/core |
+| `ranker` | LambdaRank, cluster CV, 5 seeds, ablations | CPU, minutes |
+| `peptide` | peptide benchmark, groove candidates, peptide ranker | CPU |
+| `labels` | property and hotspot label statistics | CPU |
+| `net` | EquiCave-Net, fold 0, 3 seeds | **GPU** |
+| `net-oof` | out-of-fold network features | **GPU** |
+| `hybrid` | ranker with the network's scores | CPU |
+| `ablations` | full / no_probes / no_surface / no_esm / no_tensors / invariant / achiral | **GPU** |
+| `baselines` | fpocket and P2Rank on the same structures | `FPOCKET=`, `PRANK=`, Java |
+| `eval` | held-out, COACH420, HOLO4K with one protocol | CPU |
+
 ```bash
-make net                                      # one fold
-make net-oof && python scripts/train/train_ranker.py --features-extra net --seeds 5
-make ablations                                # full | no_probes | no_surface | no_esm | no_tensors | invariant | achiral
+STAGES="net net-oof hybrid ablations" JOBS=8 bash scripts/train/train_all.sh   # a GPU box
+FPOCKET=/opt/fpocket PRANK=/opt/p2rank/prank STAGES=baselines bash scripts/train/train_all.sh
 ```
-Peptides: `make peptide-data && make peptide-ranker`. Benchmarks: `make eval`.
-Optional baselines: `FPOCKET=... PRANK=... make baselines`.
-`notebooks/equicave_train.ipynb` runs the whole thing with figures; `python -m training list` lists the tasks.
+Individual stages are also `make` targets (`make candidates`, `make ranker`, `make net`, ...) and
+`python -m training list` shows the three training tasks. `notebooks/equicave_train.ipynb` runs everything with figures.
 
 ## Layout
 | path | contents |

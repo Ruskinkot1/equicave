@@ -152,9 +152,11 @@ def load_ranker(path):
 
 
 def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None = None) -> list[dict]:
-    """Score native candidates with the learned ranker; returns feature rows best-first with `ranker_score`.
+    """Score candidates with the learned ranker; returns feature rows best-first with `ranker_score`.
 
     `extra`: optional per-candidate dicts with network features (`NET_FEATURES`), same order as `cands`.
+    Within-structure z-score features, when the model was trained with them (`<model>.preprocess.json`), are
+    recomputed here exactly as in training, so inference and training see the same columns.
     """
     booster, feats = load_ranker(model_path)
     check_geometry(model_path)
@@ -162,8 +164,18 @@ def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None
     if extra:
         for r, e in zip(rows, extra):
             r.update(e)
+    if not rows:
+        return rows
+    pre = Path(str(model_path) + ".preprocess.json")
+    if pre.exists():
+        cfg = json.loads(pre.read_text())
+        if cfg.get("zscore"):
+            base = [f for f in cfg["base_features"] if f in rows[0]]
+            M = np.array([[r.get(f, 0.0) for f in base] for r in rows], float)
+            Z = (M - M.mean(0)) / (M.std(0) + 1e-6)
+            for r, z in zip(rows, Z):
+                r.update({f"{f}_z": float(v) for f, v in zip(base, z)})
     X = np.array([[r.get(f, 0.0) for f in feats] for r in rows], float)
-    if len(X):
-        for r, v in zip(rows, booster.predict(X)):
-            r["ranker_score"] = float(v)
+    for r, v in zip(rows, booster.predict(X)):
+        r["ranker_score"] = float(v)
     return sorted(rows, key=lambda r: -r.get("ranker_score", 0.0))

@@ -1,14 +1,22 @@
 #!/usr/bin/env python
-"""Step 3: learn to rank native candidates (LightGBM LambdaRank) with an honest protocol.
+"""Step 3: learn to rank candidates (LightGBM LambdaRank) with an honest protocol.
 
-Protocol: 5-fold cross-validation by 30 %-identity cluster (manifest `fold`), several seeds, baselines on exactly the
-same structures, 95 % bootstrap CI over clusters, paired cluster bootstrap of every gain against the geometry
-baseline. Success: DCA <= 4 A. Baselines: native order (detector score = largest closed cavity first), cavity volume,
-buriedness. External finders (fpocket, P2Rank) are compared only if their candidate tables exist
-(scripts/baselines/, optional).
+Protocol: 5-fold cross-validation by 30 %-identity cluster (manifest `fold`), several seeds whose scores are averaged
+(an ensemble, which is what one would ship), baselines on exactly the same structures, 95 % bootstrap CI over
+clusters, and a paired cluster bootstrap of every gain against the detector order. Success: DCA <= 4 A.
+
+Three things beyond a plain LambdaRank fit, each switchable so its contribution can be measured:
+  --graded        relevance 2 for DCA <= 2 A, 1 for <= 4 A, 0 otherwise, instead of a binary label. Ranking a centre
+                  that sits on the ligand above one that merely touches it is what top-1 actually rewards.
+  --zscore        every feature is also given as a z-score within its own structure. Pocket ranking is a comparison
+                  inside one protein, so "deeper than the other cavities of this protein" is the informative form.
+  --ensemble      the final score is the mean over seeds (reported next to the per-seed mean).
+
+Baselines: detector order, largest cavity, most buried. External finders (fpocket, P2Rank) are compared by
+scripts/eval/compare_methods.py on the same structures.
 
 Usage: python scripts/train/train_ranker.py [--ds data/processed] [--tag native] [--seeds 5] [--ablate]
-       [--model models/ranker_native.txt] [--features-extra net]
+       [--model models/ranker_native.txt] [--features-extra net] [--no-graded] [--no-zscore]
 Output: docs/results/ranker_<tag>.json and .md
 """
 import argparse, json, pathlib, sys
@@ -20,15 +28,34 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 from equicave import metrics as M, pocket_features as pf  # noqa: E402
 
-PARAMS = dict(objective="lambdarank", metric="ndcg", eval_at=[1, 3], learning_rate=0.05, num_leaves=15, min_data_in_leaf=20,
+PARAMS = dict(objective="lambdarank", metric="ndcg", eval_at=[1, 3], learning_rate=0.05, num_leaves=31, min_data_in_leaf=20,
               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1, num_threads=4,
-              lambdarank_truncation_level=5)
+              lambdarank_truncation_level=10, label_gain=[0, 1, 3])
+TARGET = "relevance"
 
 
-def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 300):
+def add_relevance(df: pd.DataFrame, graded: bool = True) -> pd.DataFrame:
+    """Graded relevance: 2 if the centre is within 2 A of a ligand atom, 1 within 4 A, 0 otherwise."""
+    df = df.copy()
+    df[TARGET] = df["label"].astype(int)
+    if graded and "dca" in df:
+        df[TARGET] = np.where(df["dca"] <= 2.0, 2, df["label"].astype(int))
+    return df
+
+
+def add_zscores(df: pd.DataFrame, feats: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """Each feature also as a z-score inside its own structure: ranking is a comparison within one protein."""
+    g = df.groupby("pdb", sort=False)[feats]
+    z = (df[feats] - g.transform("mean")) / (g.transform("std") + 1e-6)
+    z.columns = [f"{c}_z" for c in feats]
+    return pd.concat([df, z.fillna(0.0)], axis=1), feats + list(z.columns)
+
+
+def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 400):
     train = train.sort_values("pdb", kind="stable")
     grp = train.groupby("pdb", sort=False).size().to_numpy()
-    return lgb.train(dict(PARAMS, seed=seed), lgb.Dataset(train[feats], train["label"], group=grp), num_boost_round=rounds)
+    y = train[TARGET] if TARGET in train else train["label"]
+    return lgb.train(dict(PARAMS, seed=seed), lgb.Dataset(train[feats], y, group=grp), num_boost_round=rounds)
 
 
 def cv_scores(df: pd.DataFrame, feats, seed: int) -> np.ndarray:
@@ -49,14 +76,19 @@ def main():
     ap.add_argument("--seeds", type=int, default=5); ap.add_argument("--ablate", action="store_true")
     ap.add_argument("--model", default=""); ap.add_argument("--features-extra", default="", help="e.g. net: add NET_FEATURES present in the table")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
+    ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
     df = pd.read_csv(ds / f"candidates_{a.tag}.csv").reset_index(drop=True)
     geo = json.loads((ds / f"candidates_{a.tag}.geometry.json").read_text())
-    feats = list(pf.FEATURES)
+    feats = list(pf.FEATURES) + ([f for f in pf.PEPTIDE if f in df] if a.tag == "peptide" else [])
     if a.features_extra == "net":
         feats += [f for f in pf.NET_FEATURES if f in df]
-    feats = [f for f in feats if f in df]
+    feats = [f for f in dict.fromkeys(feats) if f in df]
+    df = add_relevance(df, graded=not a.no_graded)
+    base_feats = list(feats)
+    if not a.no_zscore:
+        df, feats = add_zscores(df, feats)
     print(f"{df['pdb'].nunique()} structures, {df['cluster30'].nunique()} clusters, {len(df)} candidates, "
           f"ceiling {(df.groupby('pdb')['label'].max() == 1).mean():.3f}, {len(feats)} features")
 
@@ -66,13 +98,21 @@ def main():
                  "most buried first": df["buried_mean"].to_numpy(float)}
     for name, s in baselines.items():
         per_method[name] = [evaluate(df, s)]
-    per_method["LightGBM LambdaRank (native features)"] = [evaluate(df, cv_scores(df, feats, sd)) for sd in range(a.seeds)]
+    main_name = f"LightGBM LambdaRank ({len(feats)} features)"
+    seed_scores = [cv_scores(df, feats, sd) for sd in range(a.seeds)]
+    per_method[main_name] = [evaluate(df, s) for s in seed_scores]
+    per_method[f"{main_name}, seed ensemble"] = [evaluate(df, np.mean(seed_scores, axis=0))]
     if a.ablate:
         for g, cols in pf.GROUPS.items():
-            sub = [f for f in feats if f not in cols]
-            if len(sub) < len(feats):
+            drop = set(cols) | {f"{c}_z" for c in cols}
+            sub = [f for f in feats if f not in drop]
+            if len(sub) < len(feats) and sub:
                 per_method[f"  without {g}"] = [evaluate(df, cv_scores(df, sub, sd)) for sd in range(max(2, a.seeds // 2))]
-        per_method["  native features only"] = [evaluate(df, cv_scores(df, [f for f in pf.NATIVE if f in feats], sd)) for sd in range(max(2, a.seeds // 2))]
+        per_method["  native features only"] = [evaluate(df, cv_scores(df, [f for f in feats if f.startswith("nat_")], sd)) for sd in range(max(2, a.seeds // 2))]
+        per_method["  without the within-structure z-scores"] = [evaluate(df, cv_scores(df, base_feats, sd)) for sd in range(max(2, a.seeds // 2))]
+        if not a.no_graded:
+            binary = df.assign(**{TARGET: df["label"].astype(int)})
+            per_method["  binary relevance instead of graded"] = [evaluate(binary, cv_scores(binary, feats, sd)) for sd in range(max(2, a.seeds // 2))]
     ref = per_method["native order (detector score)"][0]
     for name, runs in per_method.items():
         avg = pd.concat(runs).groupby("pdb", sort=False).agg({c: "mean" for c in ("top1", "top3", "topN", "topN2", "mrr", "ceiling")} | {"cluster30": "first"}).reset_index()
@@ -89,14 +129,17 @@ def main():
     print(table)
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"ranker_{a.tag}.json").write_text(json.dumps(dict(n_structures=int(df['pdb'].nunique()), n_clusters=int(df['cluster30'].nunique()),
-                                                              n_candidates=len(df), seeds=a.seeds, features=feats, geometry=geo, results=results), indent=1))
+                                                              n_candidates=len(df), seeds=a.seeds, features=feats, n_features=len(feats),
+                                                              graded=not a.no_graded, zscore=not a.no_zscore, geometry=geo, results=results), indent=1))
     (out / f"ranker_{a.tag}.md").write_text(f"# Ranker results ({a.tag})\n\n{df['pdb'].nunique()} structures, {df['cluster30'].nunique()} clusters, "
                                             f"{len(df)} candidates, ceiling {(df.groupby('pdb')['label'].max() == 1).mean():.3f}; "
                                             f"5-fold CV by cluster, {a.seeds} seeds; 95 % CI by cluster bootstrap; DCA <= 4 A.\n\n{table}\n")
     if a.model:
-        m = fit(df, feats, 0); m.save_model(a.model)
+        pathlib.Path(a.model).parent.mkdir(parents=True, exist_ok=True)
+        fit(df, feats, 0).save_model(a.model)
         json.dump(feats, open(a.model + ".features.json", "w")); json.dump(pf.geometry(), open(a.model + ".geometry.json", "w"))
-        print(f"model saved to {a.model}")
+        json.dump(dict(graded=not a.no_graded, zscore=not a.no_zscore, base_features=base_feats), open(a.model + ".preprocess.json", "w"))
+        print(f"model saved to {a.model} ({len(feats)} features)")
 
 
 if __name__ == "__main__":
