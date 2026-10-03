@@ -24,12 +24,15 @@ Numbers from unconverged runs are never published here. Anything missing is mark
 
 ## Published numbers of the competing architectures, and our slots (empty until measured)
 
-Top-N DCA success rate (a predicted centre within 4 Å of a ligand atom; "top-N" = as many predictions as the
-structure has ligands) **as reported in the respective papers**. These values come from different protocols, ligand
-filters and splits, so they are a target to reproduce under our protocol, **not** a comparison. `—` = not reported.
-Every "EquiCave" row is filled only from `docs/results/` after a converged run; `not run` stays until then.
+Success rate at **top-N**, where **N is the number of ligand sites in that structure** (one prediction per true site,
+no extra guesses): a structure counts as solved when one of its first N predicted centres lies within 4 Å of a heavy
+atom of a ligand (DCA ≤ 4 Å). N therefore varies per structure — N = 1 for a single-ligand structure, N = 3 for a
+structure with three distinct sites — and `top-(N+2)` in our own tables allows two extra predictions, the convention
+used by P2Rank and DeepPocket. The values below are **as reported in the respective papers**, which differ in ligand
+filter, chain handling and splits, so they are a bar to reproduce under our protocol, **not** a comparison.
+`—` = not reported. Every "EquiCave" row is filled only from `docs/results/` after a converged run.
 
-| method | type | COACH420 | HOLO4K | PDBbind2020 / refined | LIGYSIS |
+| method | type | COACH420 top-N | HOLO4K top-N | PDBbind2020 top-N | LIGYSIS |
 |---|---|---|---|---|---|
 | fpocket | geometry (alpha spheres) | 0.228 | 0.312 | 0.291 | —  |
 | P2Rank | random forest over SAS points | 0.728 | 0.787 | 0.826 | —  |
@@ -49,6 +52,9 @@ bar we have to clear under our own protocol, in which every baseline is re-run o
 (`scripts/baselines/run_external.py`, `scripts/eval/compare_methods.py`).
 
 ### What we have measured ourselves, on our own split
+Here N is again the structure's own number of ligand sites (mean N = 2.27, median 2, maximum 20 over these 1367 structures; 609 have a single site), so top-1 is the
+strictest column: the very first prediction must hit a site.
+
 | method, same 1367 RCSB structures and labels | top-1 | top-(N+2) | ceiling | candidates |
 |---|---|---|---|---|
 | detector order (geometry only) | 0.523 [0.494, 0.552] | 0.800 [0.777, 0.825] | 0.977 | 30.0 |
