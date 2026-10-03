@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "equicave"
+version = "0.2.0"
+description = "Self-contained equivariant multi-task model of protein binding pockets"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "pandas", "lightgbm", "scikit-learn"]
+
+[project.optional-dependencies]
+train = ["torch", "fair-esm"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

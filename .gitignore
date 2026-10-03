@@ -1,0 +1,17 @@
+# raw and third-party data: never committed
+data/pockets_ds/
+data/external/
+data/cache/
+runs/
+models/*.txt.bak
+*.pdb
+*.cif
+*.ent.gz
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+env/
+.ipynb_checkpoints/

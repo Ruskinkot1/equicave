@@ -1,0 +1,125 @@
+{
+ "EGFR_TM_6LUD": {
+  "pdb": "6LUD",
+  "lig": "E5A",
+  "cluster30": [
+   "524_30"
+  ],
+  "uniprot": [
+   "P00533"
+  ]
+ },
+ "EGFR_TM_6LUB": {
+  "pdb": "6LUB",
+  "lig": "E58",
+  "cluster30": [
+   "524_30"
+  ],
+  "uniprot": [
+   "P00533"
+  ]
+ },
+ "EGFR_WT_1M17": {
+  "pdb": "1M17",
+  "lig": "AQ4",
+  "cluster30": [
+   "524_30"
+  ],
+  "uniprot": [
+   "P00533"
+  ]
+ },
+ "ER_3ERT": {
+  "pdb": "3ERT",
+  "lig": "OHT",
+  "cluster30": [
+   "444_30"
+  ],
+  "uniprot": [
+   "P03372"
+  ]
+ },
+ "BACE1_2OHU": {
+  "pdb": "2OHU",
+  "lig": "SC7",
+  "cluster30": [
+   "330_30"
+  ],
+  "uniprot": [
+   "P56817"
+  ]
+ },
+ "HIV_PR_1HSG": {
+  "pdb": "1HSG",
+  "lig": "MK1",
+  "cluster30": [
+   "94_30"
+  ],
+  "uniprot": [
+   "P03367"
+  ]
+ },
+ "CDK2_1DI8": {
+  "pdb": "1DI8",
+  "lig": "DTQ",
+  "cluster30": [
+   "200_30"
+  ],
+  "uniprot": [
+   "P24941"
+  ]
+ },
+ "HSP90_2VCI": {
+  "pdb": "2VCI",
+  "lig": "2GJ",
+  "cluster30": [
+   "164_30"
+  ],
+  "uniprot": [
+   "P07900"
+  ]
+ },
+ "BRD4_3MXF": {
+  "pdb": "3MXF",
+  "lig": "JQ1",
+  "cluster30": [
+   "97_30"
+  ],
+  "uniprot": [
+   "O60885"
+  ]
+ },
+ "A2A_4EIY": {
+  "pdb": "4EIY",
+  "lig": "ZMA",
+  "cluster30": [
+   "90_30"
+  ],
+  "uniprot": [
+   "P0ABE7",
+   "P29274"
+  ]
+ },
+ "FXA_2P16": {
+  "pdb": "2P16",
+  "lig": "GSJ",
+  "cluster30": [
+   "153_30"
+  ],
+  "uniprot": [
+   "P00742"
+  ]
+ },
+ "PPARG_2PRG": {
+  "pdb": "2PRG",
+  "lig": "570",
+  "cluster30": [
+   "243_30",
+   "4576_30"
+  ],
+  "uniprot": [
+   "P37231",
+   "Q15788"
+  ]
+ }
+}
