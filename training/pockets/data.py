@@ -49,10 +49,12 @@ def backbone_vectors(st: dict, rt: dict) -> np.ndarray:
     return out / np.maximum(norms, 1e-6)
 
 
-def knn_edges(pos: np.ndarray, types: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """Edges per ordered node-type pair. `k_scale` < 1 thins the graph (CPU pilots); 1.0 is the training default."""
     src, dst = [], []
     trees = {t: (cKDTree(pos[types == t]), np.where(types == t)[0]) for t in np.unique(types)}
-    for (ts, td), k in K_EDGES.items():
+    for (ts, td), k0 in K_EDGES.items():
+        k = max(2, int(round(k0 * k_scale)))
         if ts not in trees or td not in trees:
             continue
         tree_s, idx_s = trees[ts]; idx_d = trees[td][1]
@@ -74,7 +76,7 @@ def knn_edges(pos: np.ndarray, types: np.ndarray) -> tuple[np.ndarray, np.ndarra
 
 
 def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_probe: int = 768, n_surf: int = 512,
-              seed: int = 0, entries: dict | None = None) -> dict | None:
+              seed: int = 0, entries: dict | None = None, k_scale: float = 1.0) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable."""
     rng = np.random.default_rng(seed)
     st = structure.read_pdb(pdb_path)
@@ -130,7 +132,7 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     # graph
     pos = np.concatenate([rt["ca"], ppos, spts]).astype(np.float32)
     types = np.concatenate([np.zeros(len(rt["ca"])), np.ones(len(ppos)), np.full(len(spts), 2)]).astype(np.int64)
-    ei, et = knn_edges(pos, types)
+    ei, et = knn_edges(pos, types, k_scale)
     out = dict(pdb=Path(pdb_path).stem, pos=pos, node_type=types, feat_res=feat_res, feat_probe=feat_probe, feat_surf=feat_surf,
                vec0=np.concatenate([vec_res, vec_probe, vec_surf]).astype(np.float32), edge_index=ei, edge_type=et,
                n_res=len(rt["ca"]), n_probe=len(ppos), n_surf=len(spts), resid=rt["resid"],
@@ -190,7 +192,7 @@ def random_rotation(b: dict, rng: np.random.Generator):
 
 
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
-                n_surf: int = 512, device: str = "cpu", log=print) -> list[str]:
+                n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent."""
     import csv
     from training.pockets.esm_embed import Embedder, cached
@@ -211,7 +213,7 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
         try:
             st = structure.read_pdb(p); rt = structure.residue_table(st)
             e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
-            d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries)
+            d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale)
             if d is not None and "y_res" in d:
                 d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                 save(d, f); done.append(r["pdb"])

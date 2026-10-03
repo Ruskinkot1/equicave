@@ -29,21 +29,22 @@ structure has ligands) **as reported in the respective papers**. These values co
 filters and splits, so they are a target to reproduce under our protocol, **not** a comparison. `—` = not reported.
 Every "EquiCave" row is filled only from `docs/results/` after a converged run; `not run` stays until then.
 
-| method | type | COACH420 | HOLO4K | PDBbind2020 / refined | LIGYSIS | source of the numbers |
-|---|---|---|---|---|---|---|
-| fpocket | geometry (alpha spheres) | 0.228 | 0.312 | 0.291 | — | as re-reported by VN-EGNN (Sestak et al.) [из памяти] |
-| P2Rank | random forest over SAS points | 0.728 | 0.787 | 0.826 | — | P2Rank / VN-EGNN papers [из памяти] |
-| DeepPocket | 3D CNN rescoring of fpocket | 0.761 | 0.561 | — | — | DeepPocket paper [из памяти] |
-| DeepSurf | surface CNN | 0.731 | 0.635 | 0.732 | — | DeepSurf / VN-EGNN [из памяти] |
-| GrASP | graph attention over atoms | ≈0.78 | — | — | reported strong | GrASP paper [из памяти] |
-| EquiPocket | equivariant GNN + surface module | — | — | — | — | EquiPocket paper; metric definition differs [из памяти] |
-| VN-EGNN | equivariant GNN, virtual nodes on a sphere | 0.750 | 0.659 | 0.820 | — | VN-EGNN (J. Cheminformatics 2025, PMC12837241) [из памяти] |
-| **EquiCave (candidates only)** | our geometry-only generator | not run | not run | not run | not run | `docs/results/eval_*.md` |
-| **EquiCave (ranker)** | our candidates + LambdaRank | not run | not run | not run | not run | `docs/results/eval_*.md` |
-| **EquiCave (ranker + network)** | full model | not run | not run | not run | not run | `docs/results/eval_*.md` |
+| method | type | COACH420 | HOLO4K | PDBbind2020 / refined | LIGYSIS |
+|---|---|---|---|---|---|
+| fpocket | geometry (alpha spheres) | 0.228 | 0.312 | 0.291 | —  |
+| P2Rank | random forest over SAS points | 0.728 | 0.787 | 0.826 | —  |
+| DeepPocket | 3D CNN rescoring of fpocket | 0.761 | 0.561 | — | —  |
+| DeepSurf | surface CNN | 0.731 | 0.635 | 0.732 | —  |
+| GrASP | graph attention over atoms | ≈0.78 | — | — | reported strong  |
+| EquiPocket | equivariant GNN + surface module | — | — | — | —  |
+| VN-EGNN | equivariant GNN, virtual nodes on a sphere | 0.750 | 0.659 | 0.820 | —  |
+| **EquiCave (candidates only)** | our geometry-only generator | not run | not run | not run | not run  |
+| **EquiCave (ranker)** | our candidates + LambdaRank | not run | not run | not run | not run  |
+| **EquiCave (ranker + network)** | full model | not run | not run | not run | not run  |
 
-All published values above are marked [из памяти]: they are quoted from memory of the papers and **must be rechecked
-against the primary sources** before they appear in the manuscript. The reason they are listed at all is to fix the
+All published values above are quoted from memory of the papers (fpocket and P2Rank as re-reported by VN-EGNN;
+DeepPocket, DeepSurf, GrASP and VN-EGNN from their own papers) and **must be rechecked against the primary sources**
+before they appear in the manuscript. The reason they are listed at all is to fix the
 bar we have to clear under our own protocol, in which every baseline is re-run on our splits
 (`scripts/baselines/run_external.py`, `scripts/eval/compare_methods.py`).
 

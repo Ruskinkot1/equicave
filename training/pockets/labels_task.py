@@ -22,7 +22,7 @@ from training.pockets.net_task import DEFAULTS
 def run(a) -> int:
     cfg = load_config(a.config or DEFAULTS, a.set); dc = cfg["data"]
     cache = Path(dc["cache_dir"])
-    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, None if cfg.get("no_esm") else dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], "cpu")
+    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, None if cfg.get("no_esm") else dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], "cpu", print, dc.get("k_scale", 1.0))
     rows, hot, occ = [], [], []
     for i in ids:
         d = D.load(cache / f"{i}.npz")

@@ -190,7 +190,7 @@ def run(a) -> int:
     out_dir = run_dir(a.out, f"{tag}_fold{cfg['split']['val_fold']}_seed{cfg['optim']['seed']}")
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))
     log(f"config: {json.dumps(cfg)}")
-    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log)
+    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold

@@ -4,11 +4,12 @@ data:
   pdb_dir: data/pockets_ds/pdb
   cache_dir: data/cache/net
   esm: facebook/esm2_t12_35M_UR50D
-  n_probe: 512
-  n_surf: 256
-  limit: 300
+  n_probe: 256
+  n_surf: 128
+  k_scale: 0.5          # thinner graph: a CPU pilot only, never a published number
+  limit: 200
 split:
   val_fold: 0
-model: {dim: 48, layers: 3, heads: 4, n_rbf: 24, cutoff: 10.0, equivariant: true, use_vectors: true, use_tensors: true, chiral: true, use_surface: true, use_probes: true, dropout: 0.0}
+model: {dim: 32, layers: 2, heads: 4, n_rbf: 24, cutoff: 10.0, equivariant: true, use_vectors: true, use_tensors: true, chiral: true, use_surface: true, use_probes: true, dropout: 0.0}
 loss: {w_res: 1.0, w_occ: 1.0, w_center: 0.5, w_conf: 0.5, w_hot: 1.0, w_prop: 0.5, occ_pos_weight: 3.0, res_pos_weight: 3.0}
 optim: {lr: 0.001, weight_decay: 0.01, epochs: 8, accumulate: 2, warmup_epochs: 1, ema: 0.99, patience: 4, seed: 0, rotate: true, amp: none}
