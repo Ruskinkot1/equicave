@@ -11,6 +11,9 @@ Three things beyond a plain LambdaRank fit, each switchable so its contribution 
   --zscore        every feature is also given as a z-score within its own structure. Pocket ranking is a comparison
                   inside one protein, so "deeper than the other cavities of this protein" is the informative form.
   --ensemble      the final score is the mean over seeds (reported next to the per-seed mean).
+  calibration     a LambdaRank score is not a probability, so an isotonic regression maps it to P(the candidate hits a
+                  ligand). It is fitted per fold on the *other* folds' out-of-fold scores, never on the fold it
+                  scores, and the expected calibration error is reported before and after.
 
 Baselines: detector order, largest cavity, most buried. External finders (fpocket, P2Rank) are compared by
 scripts/eval/compare_methods.py on the same structures.
@@ -70,6 +73,31 @@ def evaluate(df: pd.DataFrame, score: np.ndarray) -> pd.DataFrame:
     return M.per_structure(df.assign(_s=score), "_s")
 
 
+def calibrate(df: pd.DataFrame, score: np.ndarray) -> tuple[np.ndarray, dict]:
+    """Isotonic map from LambdaRank score to P(hit), fitted out of fold; returns (probabilities, calibration report).
+
+    Fold k is calibrated by an isotonic regression fitted on the out-of-fold scores of every other fold, so no
+    candidate is calibrated by a model that saw it. Ranking is unchanged within a structure (the map is monotone);
+    what changes is that the number can be read as a probability.
+    """
+    from sklearn.isotonic import IsotonicRegression
+    p = np.full(len(df), np.nan)
+    folds = sorted(df["fold"].unique())
+    for k in folds:
+        te = (df["fold"] == k).to_numpy()
+        tr = ~te & np.isfinite(score)
+        if tr.sum() < 50 or df.loc[tr, "label"].nunique() < 2:
+            p[te] = 1 / (1 + np.exp(-score[te])); continue
+        iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+        iso.fit(score[tr], df.loc[tr, "label"].to_numpy(float))
+        p[te] = iso.predict(score[te])
+    y = df["label"].to_numpy(float)
+    raw = 1 / (1 + np.exp(-score))
+    return p, dict(ece_raw_sigmoid=M.ece(y, raw), ece_isotonic=M.ece(y, p),
+                   brier_raw_sigmoid=float(np.mean((raw - y) ** 2)), brier_isotonic=float(np.mean((p - y) ** 2)),
+                   mean_predicted=float(np.nanmean(p)), base_rate=float(y.mean()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ds", default=str(REPO / "data/processed")); ap.add_argument("--tag", default="native")
@@ -101,7 +129,11 @@ def main():
     main_name = f"LightGBM LambdaRank ({len(feats)} features)"
     seed_scores = [cv_scores(df, feats, sd) for sd in range(a.seeds)]
     per_method[main_name] = [evaluate(df, s) for s in seed_scores]
-    per_method[f"{main_name}, seed ensemble"] = [evaluate(df, np.mean(seed_scores, axis=0))]
+    ens = np.mean(seed_scores, axis=0)
+    per_method[f"{main_name}, seed ensemble"] = [evaluate(df, ens)]
+    prob, calib = calibrate(df, ens)
+    per_method[f"{main_name}, calibrated"] = [evaluate(df, prob)]
+    print("calibration: " + json.dumps({k: round(v, 4) for k, v in calib.items()}))
     if a.ablate:
         for g, cols in pf.GROUPS.items():
             drop = set(cols) | {f"{c}_z" for c in cols}
@@ -130,13 +162,26 @@ def main():
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"ranker_{a.tag}.json").write_text(json.dumps(dict(n_structures=int(df['pdb'].nunique()), n_clusters=int(df['cluster30'].nunique()),
                                                               n_candidates=len(df), seeds=a.seeds, features=feats, n_features=len(feats),
-                                                              graded=not a.no_graded, zscore=not a.no_zscore, geometry=geo, results=results), indent=1))
-    (out / f"ranker_{a.tag}.md").write_text(f"# Ranker results ({a.tag})\n\n{df['pdb'].nunique()} structures, {df['cluster30'].nunique()} clusters, "
-                                            f"{len(df)} candidates, ceiling {(df.groupby('pdb')['label'].max() == 1).mean():.3f}; "
-                                            f"5-fold CV by cluster, {a.seeds} seeds; 95 % CI by cluster bootstrap; DCA <= 4 A.\n\n{table}\n")
+                                                              graded=not a.no_graded, zscore=not a.no_zscore, calibration=calib,
+                                                              geometry=geo, results=results), indent=1))
+    (out / f"ranker_{a.tag}.md").write_text(
+        f"# Ranker results ({a.tag})\n\n{df['pdb'].nunique()} structures, {df['cluster30'].nunique()} clusters, "
+        f"{len(df)} candidates, ceiling {(df.groupby('pdb')['label'].max() == 1).mean():.3f}; {len(feats)} features; "
+        f"5-fold CV by 30 %-identity cluster, {a.seeds} seeds; 95 % CI by cluster bootstrap; success DCA <= 4 A; "
+        f"graded relevance {not a.no_graded}, within-structure z-scores {not a.no_zscore}.\n\n{table}\n\n"
+        f"Calibration of the seed-ensemble score (isotonic, fitted out of fold): "
+        f"ECE {calib['ece_isotonic']:.4f} after versus {calib['ece_raw_sigmoid']:.4f} for a plain sigmoid of the score; "
+        f"Brier {calib['brier_isotonic']:.4f} versus {calib['brier_raw_sigmoid']:.4f}; "
+        f"base rate {calib['base_rate']:.3f}, mean predicted {calib['mean_predicted']:.3f}.\n")
     if a.model:
         pathlib.Path(a.model).parent.mkdir(parents=True, exist_ok=True)
         fit(df, feats, 0).save_model(a.model)
+        from sklearn.isotonic import IsotonicRegression
+        iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+        ok = np.isfinite(ens)
+        iso.fit(ens[ok], df.loc[ok, "label"].to_numpy(float))
+        json.dump(dict(x=iso.X_thresholds_.tolist(), y=iso.y_thresholds_.tolist(), report=calib),
+                  open(a.model + ".calibration.json", "w"))
         json.dump(feats, open(a.model + ".features.json", "w")); json.dump(pf.geometry(), open(a.model + ".geometry.json", "w"))
         json.dump(dict(graded=not a.no_graded, zscore=not a.no_zscore, base_features=base_feats), open(a.model + ".preprocess.json", "w"))
         print(f"model saved to {a.model} ({len(feats)} features)")
