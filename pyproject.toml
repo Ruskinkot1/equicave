@@ -7,14 +7,16 @@ name = "equicave"
 version = "0.2.0"
 description = "Self-contained equivariant multi-task model of protein binding pockets"
 requires-python = ">=3.10"
-dependencies = ["numpy", "scipy", "pandas", "lightgbm", "scikit-learn"]
+dependencies = ["numpy", "scipy", "pandas", "lightgbm", "scikit-learn", "pyyaml"]
 
 [project.optional-dependencies]
-train = ["torch", "fair-esm"]
+train = ["torch", "transformers", "safetensors"]
+viz = ["matplotlib"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["equicave*", "training*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,31 @@
+{
+ "n_structures": 241,
+ "n_sites": 482,
+ "property_prevalence": {
+  "nucleotide": 0.2883817427385892,
+  "heme": 0.11618257261410789,
+  "peptide": 0.05186721991701245,
+  "carbohydrate": 0.058091286307053944,
+  "lipid": 0.04979253112033195,
+  "metal": 0.15767634854771784,
+  "size_small": 0.2095435684647303,
+  "size_large": 0.3029045643153527,
+  "buried_deep": 0.6307053941908713,
+  "buried_shallow": 0.06846473029045644,
+  "polar": 0.5871369294605809,
+  "apolar": 0.06639004149377593,
+  "aromatic_ligand": 0.6887966804979253,
+  "charged_ligand": 0.8609958506224067
+ },
+ "hotspot_point_prevalence": {
+  "hydrophobic_c": 0.047200001776218414,
+  "aromatic": 0.030400000512599945,
+  "hbd": 0.015300000086426735,
+  "hba": 0.028300000354647636,
+  "cation": 0.00279999990016222,
+  "anion": 0.016599999740719795,
+  "halogen": 0.0003000000142492354
+ },
+ "occupancy_prevalence": 0.13736708462238312,
+ "probes_per_structure": 512.0
+}

@@ -7,6 +7,8 @@ data:
   n_probe: 768
   n_surf: 512
   limit: 0
+  require_interaction: true    # hotspot labels only where the ligand atom really makes that interaction
+  druglike_only: false         # true: train the field on drug-like ligands only
 split:
   val_fold: 0                            # 5-fold CV by cluster: run once per fold
 model:

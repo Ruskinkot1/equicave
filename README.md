@@ -5,6 +5,9 @@
 1. **Where** — ranked binding sites (own geometric candidate generator + learned re-ranker + equivariant network).
 2. **What kind** — multi-label pocket property classes (ligand class, size, buriedness, polarity, charge).
 3. **Where exactly** — a hotspot field: probability of a ligand atom of each class at each grid point inside the pocket.
+   The field is trained on **interaction-validated** labels: a point counts as a hotspot for a class only when the
+   crystal ligand atom that witnesses it really makes that interaction with the receptor (H-bond, hydrophobic contact,
+   stacking, salt bridge, halogen bond), optionally restricted to drug-like ligands — not on mere proximity.
 4. **Peptide binders** — a separate groove candidate tier and peptide-specific features for peptide-binding sites.
 
 No P2Rank, no fpocket, no Java at training or inference. `src/` and `training/` depend only on numpy, scipy, pandas,

@@ -76,7 +76,8 @@ def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple
 
 
 def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_probe: int = 768, n_surf: int = 512,
-              seed: int = 0, entries: dict | None = None, k_scale: float = 1.0) -> dict | None:
+              seed: int = 0, entries: dict | None = None, k_scale: float = 1.0, druglike_only: bool = False,
+              require_interaction: bool = True) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable."""
     rng = np.random.default_rng(seed)
     st = structure.read_pdb(pdb_path)
@@ -140,12 +141,15 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     # labels
     if lig_codes is not None:
         ligs = [l for l in structure.read_ligands(pdb_path, min_heavy=8) if l["comp"] in lig_codes]
+        entries = entries or {}
+        if druglike_only:
+            ligs = [l for l in ligs if LB.druglike_ligand(l, entries.get(l["comp"]))]
         if ligs:
-            entries = entries or {}
             L = np.vstack([l["xyz"] for l in ligs])
             sites = LB.group_sites(ligs)
-            occ, hot = LB.point_labels(ppos, ligs, entries)
+            occ, hot, prox = LB.point_labels(ppos, ligs, entries, st=st, require_interaction=require_interaction)
             out.update(y_res=LB.residue_labels(st, L).astype(np.float32), y_occ=occ.astype(np.float32), y_hot=hot.astype(np.float32),
+                       y_hot_proximity=prox.astype(np.float32),
                        site_centers=LB.site_centres(ligs, sites).astype(np.float32),
                        y_prop=np.stack([LB.site_properties([ligs[i] for i in s], entries, xyz) for s in sites]).astype(np.float32),
                        site_probe_mask=np.stack([(cKDTree(np.vstack([ligs[i]["xyz"] for i in s])).query(ppos)[0] <= 8.0) for s in sites]).astype(np.float32),
@@ -168,7 +172,7 @@ def to_torch(d: dict, device="cpu"):
     b = {k: torch.as_tensor(np.asarray(d[k]), device=device) for k in ("pos", "node_type", "feat_res", "feat_probe", "feat_surf", "vec0", "edge_index", "edge_type")}
     b["slices"] = dict(res=torch.arange(n_res, device=device), probe=torch.arange(n_res, n_res + n_probe, device=device),
                        surf=torch.arange(n_res + n_probe, len(d["pos"]), device=device))
-    for k in ("y_res", "y_occ", "y_hot", "site_centers", "y_prop", "site_probe_mask"):
+    for k in ("y_res", "y_occ", "y_hot", "y_hot_proximity", "site_centers", "y_prop", "site_probe_mask"):
         if k in d:
             b[k] = torch.as_tensor(np.asarray(d[k]), device=device, dtype=torch.float32)
     b["pdb"] = d.get("pdb", "")
@@ -192,7 +196,8 @@ def random_rotation(b: dict, rng: np.random.Generator):
 
 
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
-                n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0) -> list[str]:
+                n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
+                require_interaction: bool = True) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent."""
     import csv
     from training.pockets.esm_embed import Embedder, cached
@@ -213,7 +218,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
         try:
             st = structure.read_pdb(p); rt = structure.residue_table(st)
             e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
-            d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale)
+            d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
+                          druglike_only=druglike_only, require_interaction=require_interaction)
             if d is not None and "y_res" in d:
                 d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                 save(d, f); done.append(r["pdb"])

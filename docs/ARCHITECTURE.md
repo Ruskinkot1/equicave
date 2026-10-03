@@ -153,13 +153,23 @@ the achiral model must be reflection-invariant, the chiral one must not be).
 | site centre | `center = p_probe + offset`, where `offset = Σ_f w_f V_f` is read out **from the vector channels** (an equivariant vector; the invariant ablation uses a plain MLP and is honestly reported as not equivariant there) | set loss: every true site is approached by its nearest probe within 8 Å, `mean_s min_{p near s} ‖center_p − c_s‖` |
 | confidence | per probe | BCE against `1[‖center_p − nearest site‖ < 4 Å]` (detached target) |
 | pocket properties | multi-label over 14 classes, from probes pooled with the site's soft membership mask (scalars and `‖V‖` concatenated) | BCE |
-| hotspot field | 7 ligand-atom classes per probe (hydrophobic C, aromatic, HBD, HBA, cation, anion, halogen) | focal BCE (γ = 2, α = 0.75) |
+| hotspot field | 7 ligand-atom classes per probe (hydrophobic C, aromatic, HBD, HBA, cation, anion, halogen), **interaction-validated**: a class is positive only where the witnessing ligand atom really makes that contact with the receptor | focal BCE (γ = 2, α = 0.75) |
 
 Total loss is a weighted sum (`training/configs/pockets_net.yaml`: 1.0 / 1.0 / 0.5 / 0.5 / 1.0 / 0.5).
 Labels come from `equicave.labels` + `equicave.ccd`: the wwPDB Chemical Component Dictionary (CC0) gives every ligand
 atom's element, formal charge, aromatic flag and bonds, from which donors, acceptors, charged groups, hydrophobic
 carbons and halogens are derived without any cheminformatics toolkit, and the ligand class (nucleotide, heme, peptide,
 carbohydrate, lipid, metal) comes from the component type, name and composition.
+
+**Hotspots are interactions, not proximity.** A point is a hotspot for a class only when the ligand atom that
+witnesses it makes the matching contact with the receptor: a hydrophobic carbon against a receptor hydrophobic carbon
+within 4.5 Å, an aromatic atom against a receptor ring atom within 5.5 Å (or a cation within 5.0 Å), a donor against a
+receptor acceptor within 3.5 Å and vice versa, a charged atom against the opposite charge within 4.0 Å, a halogen
+against O or S within 3.8 Å. Receptor atoms are typed by residue and atom name (`labels.protein_atom_types`), so no
+protonation inference is needed. Measured effect on one structure: of FAD's 15 nominal H-bond acceptors only 8 are
+validated, and a nominal donor of a bound inhibitor that donates to nothing is dropped entirely. The unvalidated
+("proximity") target is kept as `y_hot_proximity` and scored in parallel, so the choice is an ablation, and a drug-like
+ligand filter (`data.druglike_only`) restricts the field to molecules a drug programme would start from.
 
 ### 2.5 Training (`training/pockets/net_task.py`)
 AdamW, cosine schedule with warm-up, gradient accumulation (one structure per step, 4 steps per update), gradient

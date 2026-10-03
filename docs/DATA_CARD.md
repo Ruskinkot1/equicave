@@ -40,8 +40,19 @@ third-party databases are **never** committed (`.gitignore`); every one of them 
   component type, name and composition) plus size_small (≤ 15 atoms), size_large (≥ 35), buried_deep (mean 26-ray
   buriedness ≥ 18), buried_shallow (< 12), polar (N+O fraction ≥ 0.35), apolar (≤ 0.15), aromatic_ligand (≥ 5 aromatic
   atoms), charged_ligand.
-- **Hotspot classes** (7 per lattice point): a point is positive for a class when a ligand heavy atom of that class is
-  within 1.5 Å. Classes from the CCD: hydrophobic C, aromatic, H-bond donor, H-bond acceptor, cation, anion, halogen.
+- **Hotspot classes** (7 per lattice point), **interaction-validated**: a point is positive for a class when a ligand
+  heavy atom of that class lies within 1.5 Å **and that atom actually makes the corresponding interaction with the
+  receptor**. Classes and their tests: hydrophobic C (receptor hydrophobic carbon within 4.5 Å), aromatic (receptor
+  aromatic ring atom within 5.5 Å or a cation within 5.0 Å), H-bond donor (receptor acceptor within 3.5 Å), H-bond
+  acceptor (receptor donor within 3.5 Å), cation (receptor anion within 4.0 Å), anion (receptor cation within 4.0 Å),
+  halogen (receptor O or S within 3.8 Å). Receptor atoms are typed by residue and atom name
+  (`labels.protein_atom_types`), with HIS nitrogens counted as both donor and acceptor.
+  The plain proximity variant is stored alongside as `y_hot_proximity`, so "interaction-validated vs proximity" is an
+  ablation rather than an assumption; `labels_summary.json` reports what fraction of each class survives validation.
+- **Drug-like ligand filter** (`labels.druglike_ligand`, off by default, `data.druglike_only: true` to enable):
+  12–60 heavy atoms, at least one ring, and none of the cofactor-like CCD classes (nucleotide, heme, carbohydrate,
+  lipid, metal). The purpose is a field trained on the chemistry that real drugs exploit rather than on cofactor
+  scaffolds and crystallisation additives.
 - **Peptide sites**: ligands are polymer chains of 3–30 observed residues lying within 5 Å of a chain of ≥ 50 residues;
   the peptide chains are removed from the receptor input, so the model never sees what it must find.
 

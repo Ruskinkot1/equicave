@@ -98,7 +98,7 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
     import torch
     from equicave import metrics as MT
     ys = {k: [] for k in ("res", "occ")}; ps = {k: [] for k in ("res", "occ")}
-    yh, ph, yp, pp = [], [], [], []
+    yh, ph, yp, pp, yprox = [], [], [], [], []
     rank_rows = []
     model.eval()
     with torch.no_grad():
@@ -106,7 +106,9 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
             d = D.load(f); b = D.to_torch(d, device); out = model(b)
             ys["res"].append(d["y_res"]); ps["res"].append(torch.sigmoid(out["res_logit"]).cpu().numpy())
             ys["occ"].append(d["y_occ"]); ps["occ"].append(torch.sigmoid(out["occ_logit"]).cpu().numpy())
-            yh.append(d["y_hot"]); ph.append(torch.sigmoid(out["hot_logit"]).cpu().numpy())
+            yh.append(d["y_hot"]); ph.append(torch.sigmoid(out["hot_logit"]).detach().cpu().numpy())
+            if "y_hot_proximity" in d:
+                yprox.append(d["y_hot_proximity"])
             if "prop_logit" in out:
                 yp.append(d["y_prop"]); pp.append(torch.sigmoid(out["prop_logit"]).cpu().numpy())
             c, conf = predict_sites(out, d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]])
@@ -120,7 +122,15 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
         res[f"{k}_auroc"] = MT.auroc(y, p); res[f"{k}_ap"] = MT.average_precision(y, p); res[f"{k}_ece"] = MT.ece(y, p)
     Y, P = np.concatenate(yh), np.concatenate(ph)
     res["hot_ap_per_class"] = [MT.average_precision(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
+    res["hot_auroc_per_class"] = [MT.auroc(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
     res["hot_enrichment_top10_per_class"] = [MT.enrichment_at(Y[:, j], P[:, j], 0.1) for j in range(Y.shape[1])]
+    res["hot_ece_per_class"] = [MT.ece(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
+    res["hot_permutation_p_per_class"] = [MT.permutation_control(Y[:, j], P[:, j], MT.average_precision, n=50)[1]
+                                          if Y[:, j].any() else float("nan") for j in range(Y.shape[1])]
+    if yprox:                      # the same predictions scored against the plain proximity target, for the ablation
+        Yp = np.concatenate(yprox)
+        res["hot_ap_per_class_proximity_target"] = [MT.average_precision(Yp[:, j], P[:, j]) for j in range(Yp.shape[1])]
+        res["interaction_validated_fraction"] = (Y.sum(0) / np.maximum(Yp.sum(0), 1)).round(3).tolist()
     if yp:
         Y, P = np.concatenate(yp), np.concatenate(pp)
         res["prop_auroc_per_class"] = [MT.auroc(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
@@ -190,7 +200,7 @@ def run(a) -> int:
     out_dir = run_dir(a.out, f"{tag}_fold{cfg['split']['val_fold']}_seed{cfg['optim']['seed']}")
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))
     log(f"config: {json.dumps(cfg)}")
-    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0))
+    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold

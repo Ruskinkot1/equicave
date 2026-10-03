@@ -22,18 +22,24 @@ from training.pockets.net_task import DEFAULTS
 def run(a) -> int:
     cfg = load_config(a.config or DEFAULTS, a.set); dc = cfg["data"]
     cache = Path(dc["cache_dir"])
-    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, None if cfg.get("no_esm") else dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], "cpu", print, dc.get("k_scale", 1.0))
-    rows, hot, occ = [], [], []
+    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, None if cfg.get("no_esm") else dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], "cpu", print, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True))
+    rows, hot, prox, occ = [], [], [], []
     for i in ids:
         d = D.load(cache / f"{i}.npz")
         for s, (c, y) in enumerate(zip(d["site_centers"], d["y_prop"])):
             rows.append(dict(pdb=i, site=s, cluster30=str(d["cluster30"]), fold=int(d["fold"]), center=";".join(f"{x:.2f}" for x in c),
                              **{k: int(v) for k, v in zip(LB.PROPERTY_CLASSES, y)}))
         hot.append(d["y_hot"]); occ.append(d["y_occ"])
+        if "y_hot_proximity" in d:
+            prox.append(d["y_hot_proximity"])
     df = pd.DataFrame(rows); out = Path("data/processed"); df.to_csv(out / "labels_sites.csv", index=False)
     H = np.concatenate(hot); O = np.concatenate(occ)
+    P = np.concatenate(prox) if prox else None
     summ = dict(n_structures=len(ids), n_sites=len(df), property_prevalence={k: float(df[k].mean()) for k in LB.PROPERTY_CLASSES},
-                hotspot_point_prevalence=dict(zip(LB.HOTSPOT_CLASSES, H.mean(0).round(4).tolist())), occupancy_prevalence=float(O.mean()),
+                hotspot_point_prevalence=dict(zip(LB.HOTSPOT_CLASSES, H.mean(0).round(4).tolist())),
+                hotspot_point_prevalence_proximity=(dict(zip(LB.HOTSPOT_CLASSES, P.mean(0).round(4).tolist())) if P is not None else None),
+                interaction_validated_fraction=(dict(zip(LB.HOTSPOT_CLASSES, np.divide(H.sum(0), np.maximum(P.sum(0), 1)).round(3).tolist())) if P is not None else None),
+                occupancy_prevalence=float(O.mean()),
                 probes_per_structure=float(len(O) / max(1, len(ids))))
     (out / "labels_summary.json").write_text(json.dumps(summ, indent=1))
     print(json.dumps(summ, indent=1))
