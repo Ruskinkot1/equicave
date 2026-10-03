@@ -40,6 +40,16 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 behind P2Rank's own ranking (0.724 vs 0.754). The headroom is in ranking, which is what the richer feature set and the
 network address. The network has never been trained: its equivariance tests pass, nothing else about it is measured.
 
+### Held-out drug targets (12 families, excluded from training by cluster and UniProt)
+| method | DCA top-1 | DCA top-(N+2) | DCC top-1 | ceiling |
+|---|---|---|---|---|
+| detector order | 0.917 [0.700, 1.000] | 1.000 | 0.500 | 1.000 |
+| ranker (32-feature model) | 0.833 [0.583, 1.000] | 1.000 | 0.667 | 1.000 |
+
+Twelve structures only, so the intervals are wide and the ranker being below the detector order here is not
+significant. The DCC column (centre within 4 Å of the ligand *centroid*) is the harder criterion and the one the
+ranker improves.
+
 ### Peptide-binding sites, 973 complexes / 685 receptor clusters (clusters disjoint from training)
 Peptide chains are removed from the input. Cavity candidates reach ~0.94 ceiling, groove candidates ~0.78, so for
 peptide sites detection is not the bottleneck — ranking is. Full table: `docs/results/`.

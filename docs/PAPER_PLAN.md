@@ -57,10 +57,10 @@ F7 failure cases. T1 data. T2 main metrics. T3 ablations. T4 peptide benchmark. 
 ## Current status of the tables
 | table | status |
 |---|---|
-| T1 data | done (manifests built) |
-| T2 main | partial: native + ranker + geometry baselines measured; fpocket / P2Rank running; network **not trained** |
+| T1 data | done (1499 small-molecule entries / 1085 clusters; 973 peptide complexes / 685 receptor clusters; 12 held-out families verified against the deposited files) |
+| T2 main | partial: native candidates (ceiling 0.977) + ranker (top-1 0.724 with 32 features) + geometry baselines + P2Rank (top-1 0.754, ceiling 0.914) measured on the same 1392 structures; 109-feature ranker rebuilding; network **not trained** |
 | T3 ablations | ranker feature groups measured; network ablations need a GPU |
-| T4 peptide | candidate tiers measured on a probe; full table in progress |
+| T4 peptide | 973 complexes built; candidate tiers measured on 400 of them (ceiling 0.952, groove tier alone 0.781, cavity tiers 0.939); ranker pending |
 | T5 licences | done (`docs/DATA_CARD.md`, `docs/PROVENANCE.md`) |
 
 ## Venues
