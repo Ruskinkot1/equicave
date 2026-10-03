@@ -23,8 +23,8 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 | | ceiling | candidates | median best DCA |
 |---|---|---|---|
 | EquiCave detector (geometry only) | **0.977** | 30.0 | 0.65 Å |
+| fpocket 4.x, same structures | 0.955 | 37.8 | — |
 | P2Rank 2.5.1, same structures | 0.914 | 9.2 | — |
-| fpocket 4.x, same structures | in progress | — | — |
 
 ### Ranking, same 1367 structures and labels
 | method | top-1 | top-(N+2) |
@@ -32,13 +32,15 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 | detector order | 0.523 [0.494, 0.552] | 0.800 [0.777, 0.825] |
 | most buried first | 0.368 [0.339, 0.396] | 0.762 [0.737, 0.787] |
 | EquiCave + LambdaRank (32 features) | 0.724 [0.701, 0.748] | 0.877 [0.859, 0.896] |
+| fpocket own ranking | 0.391 | — |
 | P2Rank own ranking | 0.754 | — |
 | EquiCave + LambdaRank (88 features) | rebuilding | rebuilding |
 | EquiCave + network | not run (needs a GPU) | not run |
 
-**Honest state:** our candidate ceiling is well above P2Rank's (0.977 vs 0.914), but our current re-ranker is slightly
-behind P2Rank's own ranking (0.724 vs 0.754). The headroom is in ranking, which is what the richer feature set and the
-network address. The network has never been trained: its equivariance tests pass, nothing else about it is measured.
+**Honest state:** our candidate ceiling is the highest of the three (0.977 against 0.955 for fpocket and 0.914 for
+P2Rank), and our ranker is far ahead of fpocket's ordering (0.724 against 0.391), but still behind P2Rank's own
+ranking (0.754). The headroom is therefore in ranking, which is what the richer feature set and the network address.
+The network has only been run as a CPU pilot; no trained network number exists yet.
 
 ### Held-out drug targets (12 families, excluded from training by cluster and UniProt)
 | method | DCA top-1 | DCA top-(N+2) | DCC top-1 | ceiling |
