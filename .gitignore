@@ -1,5 +1,6 @@
 # raw and third-party data: never committed
 data/pockets_ds/
+data/processed/*_chunks/
 data/external/
 data/cache/
 runs/

@@ -6,8 +6,12 @@ Label: DCA (centre to nearest heavy atom of any kept ligand copy, >= 8 heavy ato
 Also per structure: n_sites (distinct ligand sites; copies within 8 A merged) for the top-N / top-(N+2) metrics,
 and the best DCA of any candidate (ceiling analysis).
 
+The run is **restartable**: rows are flushed to `data/processed/<tag>_chunks/part_*.csv` every `--chunk` structures and
+structures already present in the chunks are skipped, so a run that is interrupted loses at most one chunk. The final
+table is the concatenation of the chunks (`--keep-chunks` to leave them on disk).
+
 Usage: python scripts/train/build_native.py [--manifest data/processed/manifest.csv] [--jobs 4] [--limit N]
-       [--min-buried 14] [--nms 6] [--tag native]
+       [--min-buried 16] [--nms 6] [--tag native] [--chunk 50]
 Output: data/processed/candidates_<tag>.csv + .geometry.json, data/processed/structures_<tag>.csv (per-structure summary)
 """
 import argparse, csv, json, os, pathlib, sys, time
@@ -68,6 +72,8 @@ def main():
     ap.add_argument("--max-sites", type=int, default=detect.MAX_SITES)
     ap.add_argument("--fill", type=int, default=detect.FILL_MIN_BURIED)
     ap.add_argument("--tag", default="native")
+    ap.add_argument("--chunk", type=int, default=50, help="flush to disk every N structures (0 = only at the end)")
+    ap.add_argument("--keep-chunks", action="store_true")
     a = ap.parse_args()
     man = list(csv.DictReader(open(a.manifest)))
     if a.limit:
@@ -80,19 +86,54 @@ def main():
         if p.exists():
             codes = {l[0] for l in json.loads(r["ligands"])}
             tasks.append((r["pdb"], p, codes, dict(cluster30=r["cluster30"], fold=int(r["fold"])), params))
-    print(f"{len(tasks)}/{len(man)} structures have a PDB file", flush=True)
-    rows, summ = [], []
+    out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
+    chunk_dir = out / f"{a.tag}_chunks"; chunk_dir.mkdir(exist_ok=True)
+    done, prev_rows, prev_summ = set(), [], []
+    for f in sorted(chunk_dir.glob("part_*.csv")):
+        try:
+            d = pd.read_csv(f)
+            prev_rows.append(d); done |= set(d["pdb"].unique())
+        except Exception:  # noqa: BLE001
+            print(f"  ignoring unreadable chunk {f.name}")
+    for f in sorted(chunk_dir.glob("summary_*.csv")):
+        try:
+            prev_summ.append(pd.read_csv(f))
+        except Exception:  # noqa: BLE001
+            pass
+    if done:
+        print(f"resuming: {len(done)} structures already in {chunk_dir.name}", flush=True)
+    tasks = [t for t in tasks if t[0] not in done]
+    print(f"{len(tasks)} structures to process ({len(man)} in the manifest)", flush=True)
+    rows, summ, part, pending, pending_s = [], [], len(list(chunk_dir.glob("part_*.csv"))), [], []
+
+    def flush():
+        nonlocal part, pending, pending_s
+        if pending:
+            pd.DataFrame(pending).to_csv(chunk_dir / f"part_{part:04d}.csv", index=False)
+            pd.DataFrame(pending_s).to_csv(chunk_dir / f"summary_{part:04d}.csv", index=False)
+            part += 1; pending, pending_s = [], []
+
     with ProcessPoolExecutor(a.jobs) as ex:
         for i, (rr, s) in enumerate(ex.map(one, tasks, chunksize=2), 1):
-            rows += rr; summ.append(s)
+            rows += rr; summ.append(s); pending += rr; pending_s.append(s)
+            if a.chunk and i % a.chunk == 0:
+                flush()
             if i % 100 == 0:
                 ok = [x for x in summ if x["status"] == "ok"]
-                print(f"  {i}: ceiling so far {np.mean([x['hit'] for x in ok]):.3f}, mean cands {np.mean([x['n_cands'] for x in ok]):.1f}", flush=True)
-    out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows); sm = pd.DataFrame(summ)
+                if ok:
+                    print(f"  {i}: ceiling so far {np.mean([x['hit'] for x in ok]):.3f}, mean cands {np.mean([x['n_cands'] for x in ok]):.1f}", flush=True)
+    flush()
+    df = pd.concat(prev_rows + [pd.DataFrame(rows)], ignore_index=True) if (prev_rows or rows) else pd.DataFrame()
+    sm = pd.concat(prev_summ + [pd.DataFrame(summ)], ignore_index=True) if (prev_summ or summ) else pd.DataFrame()
+    if df.empty:
+        sys.exit("no candidates produced")
     df.to_csv(out / f"candidates_{a.tag}.csv", index=False)
     sm.to_csv(out / f"structures_{a.tag}.csv", index=False)
     (out / f"candidates_{a.tag}.geometry.json").write_text(json.dumps(dict(pf.geometry(), **params), indent=1))
+    if not a.keep_chunks:
+        for f in chunk_dir.glob("*.csv"):
+            f.unlink()
+        chunk_dir.rmdir()
     ok = sm[sm.status == "ok"]
     bad = sm[sm.status != "ok"]
     print(f"{len(ok)} structures ok, {len(bad)} skipped ({bad.status.value_counts().to_dict() if len(bad) else {}})")

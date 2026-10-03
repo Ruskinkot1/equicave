@@ -10,7 +10,10 @@ Candidates: `detect.detect_sites` (cavity tiers 1-2, <= --small) merged with `pe
 (groove tier 3, <= --groove) by 6 A non-maximum suppression. Features: the shared set of `pocket_features.featurize`
 plus `peptide.groove_features` for every candidate of every tier.
 
-Usage: python scripts/train/build_peptide.py [--jobs 4] [--limit N]
+The run is restartable in the same way as build_native.py: rows are flushed to `<tag>_chunks/` every `--chunk`
+receptors and receptors already present are skipped.
+
+Usage: python scripts/train/build_peptide.py [--jobs 4] [--limit N] [--chunk 50]
 Output: data/processed/candidates_peptide.csv (+ .geometry.json), data/processed/structures_peptide.csv
 """
 import argparse, csv, json, os, pathlib, sys, time
@@ -81,6 +84,7 @@ def main():
     ap.add_argument("--small", type=int, default=30); ap.add_argument("--groove", type=int, default=20)
     ap.add_argument("--min-res", type=int, default=4); ap.add_argument("--max-res", type=int, default=30)
     ap.add_argument("--tag", default="peptide")
+    ap.add_argument("--chunk", type=int, default=50); ap.add_argument("--keep-chunks", action="store_true")
     a = ap.parse_args()
     man = list(csv.DictReader(open(a.manifest)))
     if a.limit:
@@ -92,17 +96,51 @@ def main():
         if p.exists():
             tasks.append((r["pdb"], p, r.get("rec_chains", ""), r.get("pep_chains", ""),
                           dict(cluster30=r["cluster30"], fold=int(r["fold"])), params))
-    print(f"{len(tasks)}/{len(man)} entries have a PDB file", flush=True)
-    rows, summ = [], []
+    out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
+    chunk_dir = out / f"{a.tag}_chunks"; chunk_dir.mkdir(exist_ok=True)
+    done, prev_rows, prev_summ = set(), [], []
+    for f in sorted(chunk_dir.glob("part_*.csv")):
+        try:
+            d = pd.read_csv(f); prev_rows.append(d); done |= set(d["pdb"].unique())
+        except Exception:  # noqa: BLE001
+            print(f"  ignoring unreadable chunk {f.name}")
+    for f in sorted(chunk_dir.glob("summary_*.csv")):
+        try:
+            prev_summ.append(pd.read_csv(f))
+        except Exception:  # noqa: BLE001
+            pass
+    if done:
+        print(f"resuming: {len(done)} receptors already done", flush=True)
+    tasks = [t for t in tasks if t[0] not in done]
+    print(f"{len(tasks)} receptors to process ({len(man)} in the manifest)", flush=True)
+    rows, summ, part, pending, pending_s = [], [], len(list(chunk_dir.glob("part_*.csv"))), [], []
+
+    def flush():
+        nonlocal part, pending, pending_s
+        if pending:
+            pd.DataFrame(pending).to_csv(chunk_dir / f"part_{part:04d}.csv", index=False)
+            pd.DataFrame(pending_s).to_csv(chunk_dir / f"summary_{part:04d}.csv", index=False)
+            part += 1; pending, pending_s = [], []
+
     with ProcessPoolExecutor(a.jobs) as ex:
         for i, (rr, s) in enumerate(ex.map(one, tasks, chunksize=2), 1):
-            rows += rr; summ.append(s)
+            rows += rr; summ.append(s); pending += rr; pending_s.append(s)
+            if a.chunk and i % a.chunk == 0:
+                flush()
             if i % 100 == 0:
                 ok = [x for x in summ if x["status"] == "ok"]
-                print(f"  {i}: ceiling {np.mean([x['hit'] for x in ok]):.3f} (groove {np.mean([x['hit_groove'] for x in ok]):.3f}, "
-                      f"cavity {np.mean([x['hit_cavity'] for x in ok]):.3f})", flush=True)
-    out = pathlib.Path(a.out)
-    df = pd.DataFrame(rows); sm = pd.DataFrame(summ)
+                if ok:
+                    print(f"  {i}: ceiling {np.mean([x['hit'] for x in ok]):.3f} (groove {np.mean([x['hit_groove'] for x in ok]):.3f}, "
+                          f"cavity {np.mean([x['hit_cavity'] for x in ok]):.3f})", flush=True)
+    flush()
+    df = pd.concat(prev_rows + [pd.DataFrame(rows)], ignore_index=True)
+    sm = pd.concat(prev_summ + [pd.DataFrame(summ)], ignore_index=True)
+    if df.empty:
+        sys.exit("no candidates produced")
+    if not a.keep_chunks:
+        for f in chunk_dir.glob("*.csv"):
+            f.unlink()
+        chunk_dir.rmdir()
     df.to_csv(out / f"candidates_{a.tag}.csv", index=False); sm.to_csv(out / f"structures_{a.tag}.csv", index=False)
     (out / f"candidates_{a.tag}.geometry.json").write_text(json.dumps(dict(pf.geometry(), **params,
         GROOVE_MIN_BURIED=PEP.GROOVE_MIN_BURIED, SEG_LEN=PEP.SEG_LEN, PEAK_NMS=PEP.PEAK_NMS), indent=1))
