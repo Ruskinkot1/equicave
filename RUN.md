@@ -39,7 +39,7 @@ STAGES="net net-oof hybrid ablations" bash scripts/train/train_all.sh  # GPU par
 | # | command | what it does | hardware | roughly |
 |---|---|---|---|---|
 | 1 | `make data` | RCSB manifest (CC0) + download structures | network | 20 min |
-| 2 | `make candidates JOBS=8` | geometric candidates, 109 features, labels | CPU | 5 s per structure per core |
+| 2 | `make candidates JOBS=8` | geometric candidates, 118 features, labels | CPU | 5 s per structure per core |
 | 3 | `make ranker` | LambdaRank, 5-fold cluster CV, seeds, ablations, calibration | CPU | minutes |
 | 4 | `make peptide-data && make peptide-ranker` | peptide benchmark and its ranker | CPU | 11 s per receptor per core |
 | 5 | `make labels` | property and hotspot label statistics | CPU | minutes |

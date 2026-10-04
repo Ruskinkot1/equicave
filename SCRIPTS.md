@@ -17,7 +17,8 @@ Run everything from the repository root with `export PYTHONPATH=src:.`, or throu
 
 | script | what it does | output |
 |---|---|---|
-| `scripts/train/build_native.py` | geometric candidates for every manifest structure, 109 features, DCA/DCC and labels; checkpoints every 50 structures and resumes | `candidates_native.csv.gz`, `structures_native.csv` |
+| `scripts/train/build_native.py` | geometric candidates for every manifest structure, 118 features, DCA/DCC and labels; checkpoints every 50 structures and resumes | `candidates_native.csv.gz`, `structures_native.csv` |
+| `scripts/train/build_points.py` | one row per cavity grid point with its 32 ligandability features and occupancy label; restartable | `data/processed/points_<tag>.csv.gz` |
 | `scripts/train/build_peptide.py` | cavity + groove candidates for the peptide benchmark, with the peptide feature group; peptide chains removed from the input | `candidates_peptide.csv.gz` |
 
 ## Training
@@ -25,6 +26,7 @@ Run everything from the repository root with `export PYTHONPATH=src:.`, or throu
 | script | what it does | output |
 |---|---|---|
 | `scripts/train/train_ranker.py` | LambdaRank over candidates: 5-fold CV by cluster, several seeds, graded relevance, within-structure z-scores, seed ensemble, out-of-fold isotonic calibration, feature-group ablations | `docs/results/ranker_<tag>.md/.json`, `models/ranker_<tag>.txt` |
+| `scripts/train/train_point_model.py` | the per-point ligandability model: one gradient-boosted model per cluster fold, out-of-fold AUROC/AP with a permutation control, and the candidate aggregates the ranker consumes | `models/point_<tag>*.txt`, `data/processed/point_features_<tag>.csv.gz`, `docs/results/point_model_<tag>.md/.json` |
 | `scripts/train/train_properties.py` | the tabular baseline the network's property head must beat: one classifier per property class, out-of-fold, per-class AUROC/AP with cluster bootstrap, ECE, permutation control | `docs/results/properties_<tag>.md/.json` |
 | `python -m training pockets-net` | **the network**: builds the feature cache, trains the multi-task model on four folds, validates on the fifth, keeps the best EMA weights; `--set mode=oof` trains one model per fold and writes the ranker's network features | `runs/training/<tag>_fold<k>_seed<s>/` |
 | `python -m training pockets-labels` | property and hotspot label statistics, including what fraction of each hotspot class survives interaction validation | `labels_sites.csv`, `labels_summary.json` |
@@ -38,6 +40,7 @@ Run everything from the repository root with `export PYTHONPATH=src:.`, or throu
 | script | what it does | output |
 |---|---|---|
 | `scripts/eval/evaluate.py` | one protocol for every benchmark (`--set heldout\|coach420\|holo4k\|ligysis\|cryptobench`): own candidates, ranker, network, DCA and DCC, top-1/3/N/(N+2), non-redundant predictions, train-similar structures as a separate row | `docs/results/eval_<set>.md/.json` |
+| `scripts/eval/compare_on_set.py` | us against external tools on one benchmark, intersected to the structures both predicted, split by train-similarity and by the structure's number of sites, with paired cluster bootstraps | `docs/results/compare_<set>.md/.json` |
 | `scripts/eval/compare_methods.py` | the paired table: native, fpocket and P2Rank candidates on the same structures, each with and without the learned ranker | `docs/results/methods_comparison.md/.json` |
 
 ## Baselines (optional, never imported by `src/` or `training/`)

@@ -5,7 +5,7 @@ JOBS ?= 4
 DS   ?= data/processed
 TAG  ?= max
 
-.PHONY: help setup test data data-max candidates candidates-max esm ranker ranker-max peptide-data peptide-ranker labels net net-oof ablations eval baselines all all-max clean
+.PHONY: help setup test data data-max candidates candidates-max points esm ranker ranker-max ranker-points peptide-data peptide-ranker labels net net-oof ablations eval baselines all all-max clean
 help:            ## list the targets
 	@grep -E '^[a-z-]+:.*##' Makefile | sed 's/:.*##/\t/' | expand -t24
 
@@ -35,8 +35,15 @@ esm:             ## ESM-2 features per candidate for the ranker (no GPU needed; 
 ranker-max:      ## the ranker on the maximum table, with the language-model features
 	$(PY) scripts/train/train_ranker.py --tag max --features-extra esm --seeds 5 --ablate --model models/ranker_max.txt
 
+points:          ## per-point ligandability: build the point table, then the out-of-fold model and its aggregates
+	$(PY) scripts/train/build_points.py --jobs $(JOBS)
+	$(PY) scripts/train/train_point_model.py
+
 ranker:          ## LightGBM LambdaRank, cluster 5-fold CV, 5 seeds, ablations
 	$(PY) scripts/train/train_ranker.py --seeds 5 --ablate --model models/ranker_native.txt
+
+ranker-points:   ## the same ranker plus the per-point aggregates (needs `make points` first)
+	$(PY) scripts/train/train_ranker.py --seeds 5 --ablate --features-extra points --model models/ranker_points.txt
 
 peptide-data:    ## peptide-site benchmark: manifest, structures, merged cavity+groove candidates
 	$(PY) scripts/data/build_peptide_manifest.py --n 4000 --seed 0 --disjoint-from $(DS)/manifest.csv
@@ -66,7 +73,7 @@ eval:            ## every benchmark with one protocol
 	$(PY) scripts/data/fetch_eval_sets.py
 	for s in heldout coach420 holo4k; do $(PY) scripts/eval/evaluate.py --set $$s --ranker models/ranker_native.txt --jobs $(JOBS); done
 
-all: data candidates ranker peptide-data peptide-ranker labels
+all: data candidates points ranker ranker-points peptide-data peptide-ranker labels
 all-max: data-max candidates-max esm ranker-max   ## the large-scale pipeline, start to finish
 clean:
 	rm -rf runs __pycache__ .pytest_cache

@@ -29,7 +29,9 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 | fpocket 4.x, same structures | 0.955 | 37.8 | — |
 | P2Rank 2.5.1, same structures | 0.914 | 9.2 | — |
 
-### Ranking on the leakage-free subset (432 structures, 383 clusters, 109 features)
+### Ranking on the leakage-free subset (432 structures, 383 clusters)
+Measured with the 109-feature table; the feature table is now 118 columns (the interaction-potential group was
+redefined after measurement showed it saturated) and these rows are being re-measured on it.
 Structures sharing a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family are
 removed from training *and* from this cross-validation, so nothing here is memorised from a benchmark.
 
@@ -58,13 +60,32 @@ order is +0.275 top-1 [+0.228, +0.329] by paired cluster bootstrap.
 | EquiCave + LambdaRank (32 features) | 0.724 [0.701, 0.748] | 0.877 [0.859, 0.896] |
 | fpocket own ranking | 0.391 | — |
 | P2Rank own ranking | 0.754 | — |
-| EquiCave + LambdaRank (88 features) | rebuilding | rebuilding |
+| EquiCave + LambdaRank (118 features) | rebuilding | rebuilding |
 | EquiCave + network | not run (needs a GPU) | not run |
 
-**Honest state:** our candidate ceiling is the highest of the three (0.977 against 0.955 for fpocket and 0.914 for
-P2Rank), and our ranker is far ahead of fpocket's ordering (0.724 against 0.391), but still behind P2Rank's own
-ranking (0.754). The headroom is therefore in ranking, which is what the richer feature set and the network address.
-The network has only been run as a CPU pilot; no trained network number exists yet.
+### COACH420 head-to-head, identical structures (`scripts/eval/compare_on_set.py`)
+283 structures predicted by both methods, same ligand list and same labels. `not train-similar` excludes the
+structures sharing a 30 %-identity cluster with our training manifest; that is leakage for us and not for P2Rank,
+whose own training overlap with COACH420 this table does not measure, so it is the row to read for us.
+
+| subset | method | predictions | ceiling | top-1 | top-N | top-(N+2) |
+|---|---|---|---|---|---|---|
+| not train-similar (174) | **EquiCave + ranker** | 29.9 | **0.992** | 0.707 [0.635, 0.773] | 0.741 [0.673, 0.807] | **0.908** [0.862, 0.948] |
+| not train-similar (174) | P2Rank 2.5.1 | 9.6 | 0.931 | **0.753** [0.688, 0.814] | **0.828** [0.771, 0.881] | 0.879 [0.830, 0.926] |
+| all (283) | EquiCave + ranker | 30.0 | 0.989 | 0.753 | 0.781 | 0.915 |
+| all (283) | P2Rank 2.5.1 | 8.4 | 0.940 | 0.770 | 0.841 | 0.905 |
+
+Paired cluster bootstrap on the comparable subset: top-1 −0.046 [−0.133, +0.035], top-N −0.086 [−0.169, −0.006],
+top-(N+2) +0.029 [−0.030, +0.083]. So we are indistinguishable on top-1 and top-(N+2) and behind on top-N.
+
+**Honest state:** detection is not the bottleneck and has not been for some time — our candidate set contains the
+answer for 0.992 of those structures against P2Rank's 0.935. The bottleneck is first-rank accuracy: we convert 72 %
+of our ceiling into a correct first prediction where P2Rank converts 82 % of its own. The obvious explanation,
+that our 30 predictions fragment one pocket and eat the top-N budget, is **measured and false**: 210 of the 283
+structures have one site, where top-N is top-1 and merging predictions cannot change anything, and that is where
+the deficit is largest (`docs/results/README.md`). Two things address it and neither has been measured yet on a
+benchmark — the per-point ligandability score (Stage 2b, in place, CPU-only) and the network's own per-probe
+segmentation and confidence, which has never been trained because it needs a GPU.
 
 ### Held-out drug targets (12 families, excluded from training by cluster and UniProt)
 | method | DCA top-1 | DCA top-(N+2) | DCC top-1 | ceiling |
@@ -107,7 +128,7 @@ bash scripts/train/train_all.sh         # the whole pipeline; GPU stages are ski
 | stage | what it does | needs |
 |---|---|---|
 | `data` | RCSB manifest (CC0) and structures | network, ~20 min |
-| `candidates` | native candidates, 88 features, labels | CPU, ~3.6 s/structure/core |
+| `candidates` | native candidates, 118 features, labels | CPU, ~3.6 s/structure/core |
 | `ranker` | LambdaRank, cluster CV, 5 seeds, ablations | CPU, minutes |
 | `peptide` | peptide benchmark, groove candidates, peptide ranker | CPU |
 | `labels` | property and hotspot label statistics | CPU |
@@ -128,7 +149,7 @@ Individual stages are also `make` targets (`make candidates`, `make ranker`, `ma
 ## Layout
 | path | contents |
 |---|---|
-| `src/equicave/` | `detect` (candidates), `peptide` (grooves), `pockets` (grid, buriedness, SAS), `pocket_features` (88 ranker features), `labels` (+ interaction validation), `ccd`, `metrics`, `structure`, `viz`, `mcp_server` |
+| `src/equicave/` | `detect` (candidates), `peptide` (grooves), `pockets` (grid, buriedness, SAS), `pocket_features` (118 ranker features), `labels` (+ interaction validation), `ccd`, `metrics`, `structure`, `viz`, `mcp_server` |
 | `training/` | `pockets/model.py` (EquiCave-Net), `data.py`, `net_task.py`, `labels_task.py`, `configs/`, `environment.yml`, `Dockerfile` |
 | `scripts/` | `data/` (manifests, structures, benchmark lists), `train/`, `eval/`, `baselines/` |
 | `data/processed/` | small tables only; structures and third-party data are rebuilt, never committed |
