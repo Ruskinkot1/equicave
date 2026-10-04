@@ -29,9 +29,24 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 | fpocket 4.x, same structures | 0.955 | 37.8 | — |
 | P2Rank 2.5.1, same structures | 0.914 | 9.2 | — |
 
-### Ranking on the leakage-free subset (432 structures, 383 clusters)
-Measured with the 109-feature table; the feature table is now 118 columns (the interaction-potential group was
-redefined after measurement showed it saturated) and these rows are being re-measured on it.
+### Ranking on the leakage-free subset (432 structures, 383 clusters, 118-feature table)
+Cross-validated by 30 %-identity cluster, five seeds. Feature-group ablations, each the full model minus one group:
+
+| group removed | top-1 | cost |
+|---|---|---|
+| nothing (full model) | 0.788 [0.750, 0.828] | — |
+| chemistry (14) | 0.749 [0.706, 0.789] | −0.039 |
+| shell (46) | 0.755 [0.713, 0.796] | −0.033 |
+| geometry (18) | 0.767 [0.728, 0.807] | −0.021 |
+| **potential (30)** | 0.767 [0.725, 0.811] | **−0.021** |
+| native (8) | 0.782 [0.742, 0.821] | −0.006 |
+| context (2) | 0.787 [0.746, 0.826] | −0.001 |
+
+The interaction-potential group is now the joint third most valuable of the six. It was worth nothing at all before
+it was redefined: its features were availability flags that a 4.5–5.5 Å cutoff inside a protein always satisfies, so
+21 of the then 109 columns were constant and no ablation could have shown it.
+
+Earlier rows below were measured with the 109-feature table and are kept for comparison.
 Structures sharing a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family are
 removed from training *and* from this cross-validation, so nothing here is memorised from a benchmark.
 

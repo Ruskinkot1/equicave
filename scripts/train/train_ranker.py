@@ -241,6 +241,9 @@ def main():
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
     ap.add_argument("--margins", action="store_true", help="add per-structure margin features (value minus the best other)")
+    ap.add_argument("--points-tag", default="", help="which point_features_<tag> table to join; defaults to --tag. "
+                    "The detector is deterministic, so a point table built for one candidate tag joins any other "
+                    "table of the same manifest on (pdb, center)")
     ap.add_argument("--cascade", default="", help="comma-separated k: second-stage re-rankers over the top k "
                     "candidates of the first stage, e.g. 3,5")
     ap.add_argument("--objectives", action="store_true", help="also fit binary and regression objectives and rank-average")
@@ -265,7 +268,7 @@ def main():
     if "net" in extras:
         feats += [f for f in pf.NET_FEATURES if f in df]
     if "points" in extras:                  # aggregates of the learned per-point ligandability score
-        pfile = ds / f"point_features_{a.tag}.csv.gz"
+        pfile = ds / f"point_features_{a.points_tag or a.tag}.csv.gz"
         if not pfile.exists():
             sys.exit(f"{pfile.name} missing: run scripts/train/build_points.py then train_point_model.py --tag {a.tag}")
         pt = pd.read_csv(pfile).drop(columns=["fold"], errors="ignore")

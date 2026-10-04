@@ -18,6 +18,22 @@ ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluste
 
 ## Negative results worth keeping
 
+**A cascade re-ranker over the top candidates is worse than one model over all of them** (measured 2026-10-04 on the
+cleaned 432 structures, `docs/results/clean3/`). The diagnosis invited it: when our first prediction is wrong the
+correct candidate is ranked second in 24 of 53 COACH420 cases and within the first five in 41 of 53, so a second
+stage trained only on the top k -- where typically exactly one candidate is correct and the whole gradient is the
+choice that decides top-1 -- should have sharpened exactly that decision. It does the opposite. Against the
+first stage's 0.796 top-1 (seed ensemble), re-ranking the top 3 gives 0.771 and the top 5 gives 0.766, with top-(N+2)
+unchanged at 0.919. The restriction throws away about 97 % of the rows (432 structures x 3 instead of 12 955
+candidates) and with them the easy negatives that place the hard pair on a scale, and a few thousand rows cannot
+support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
+once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
+
+**Moving a candidate's centre cannot fix a wrong first prediction** (measured 2026-10-04). Of the 53 non-train-similar
+COACH420 structures whose first prediction is wrong, 4 are within 5 A of the ligand and 34 are more than 8 A away:
+the first prediction is usually a different pocket, not a near miss. This is the second negative result for
+re-centring, after the earlier one showing six centre definitions all within noise for DCC.
+
 **Merging our predictions cannot close the gap to P2Rank on COACH420** (measured 2026-10-04,
 `docs/results/compare_coach420.md`). We emit 30 predictions per structure to P2Rank's 9.6 and lose top-N by
 0.086 [0.006, 0.169] on the 174 structures that are not similar to our training set, so the obvious reading was
