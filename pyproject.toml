@@ -11,6 +11,7 @@ dependencies = ["numpy", "scipy", "pandas", "lightgbm", "scikit-learn", "pyyaml"
 
 [project.optional-dependencies]
 train = ["torch", "transformers", "safetensors"]
+e3nn = ["e3nn"]
 viz = ["matplotlib"]
 dev = ["pytest"]
 

@@ -83,3 +83,58 @@ def test_ablation_drops_surface_and_probe_edges():
     nosurf.load_state_dict(full.state_dict())
     with torch.no_grad():
         assert not torch.allclose(full(b)["res_logit"], nosurf(b)["res_logit"])
+
+
+def test_recycling_changes_output_and_stays_equivariant():
+    torch.manual_seed(0)
+    b = _batch()
+    b["edge_scalar"] = torch.zeros(b["edge_index"].shape[1], 11)
+    b["res_type"] = torch.randint(0, 21, (12,))
+    net0 = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, recycles=0, n_edge_scalar=11).eval()
+    net2 = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, recycles=2, n_edge_scalar=11).eval()
+    net2.load_state_dict(net0.state_dict(), strict=False)
+    R, t = _rot(3), torch.tensor([5.0, 1.0, -2.0])
+    with torch.no_grad():
+        o0, o2 = net0(b), net2(b)
+        o2r = net2(_apply(b, R, t))
+    assert len(o0["passes"]) == 1 and len(o2["passes"]) == 3
+    assert not torch.allclose(o0["center"], o2["center"], atol=1e-4)          # recycling moves the prediction
+    assert torch.allclose(o2["res_logit"], o2r["res_logit"], atol=1e-4)        # and stays invariant
+    assert torch.allclose(o2["center"] @ R.T + t, o2r["center"], atol=1e-3)    # centres stay equivariant
+
+
+def test_hungarian_matching_assigns_distinct_proposals():
+    torch.manual_seed(0)
+    probe = torch.randn(40, 3) * 6
+    sites = torch.tensor([[0.0, 0, 0], [12.0, 0, 0], [-9.0, 4, 2]])
+    conf = torch.randn(40)
+    greedy, _ = M.center_set_loss(probe, conf, probe, sites, hungarian=False)
+    hung, _ = M.center_set_loss(probe, conf, probe, sites, hungarian=True)
+    assert torch.isfinite(greedy) and torch.isfinite(hung)
+    # a single probe cannot serve two sites under matching, so the matched cost is never below the greedy one
+    assert hung >= greedy - 1e-5
+
+
+def test_sequence_edge_scalars_and_masking():
+    import numpy as np
+    from training.pockets import data as D
+    ei = np.array([[0, 1, 0, 5], [1, 0, 5, 0]])
+    types = np.array([0, 0, 0, 0, 0, 1])
+    res_index = np.array([0, 1, 2, 3, 4, -10000]); chain = np.array([0, 0, 0, 1, 1, -1])
+    es = D.edge_scalars(ei, types, res_index, chain)
+    assert es.shape == (4, len(D.SEQ_BUCKETS) + 3)
+    assert es[0, 0] == 1.0 and es[0, -2] == 1.0 and es[0, -1] == 1.0       # neighbours in the same chain
+    assert es[2, -1] == 0.0                                                # residue to probe: not a residue pair
+    b = dict(feat_res=torch.ones(10, 23), res_type=torch.randint(0, 21, (10,)))
+    b2, m = D.mask_residues(b, frac=1.0)
+    assert m.all() and float(b2["feat_res"].abs().sum()) == 0.0
+    b3, m0 = D.mask_residues(b, frac=0.0)
+    assert not m0.any() and float(b3["feat_res"].abs().sum()) > 0
+
+
+def test_auxiliary_losses_are_finite():
+    seq_logit = torch.randn(10, 21); types = torch.randint(0, 21, (10,))
+    mask = torch.zeros(10, dtype=torch.bool); mask[:3] = True
+    assert torch.isfinite(M.masked_residue_loss(seq_logit, types, mask))
+    assert float(M.masked_residue_loss(seq_logit, types, torch.zeros(10, dtype=torch.bool))) == 0.0
+    assert torch.isfinite(M.size_loss(torch.randn(3), torch.tensor([12.0, 30.0, 8.0])))

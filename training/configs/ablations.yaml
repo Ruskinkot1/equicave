@@ -8,3 +8,9 @@ ablations:
   no_vectors: {model.use_vectors: false}            # degree 0 only but still gated by edge directions? no: distances only
   invariant: {model.equivariant: false}             # distances-only GNN, same depth and width
   achiral: {model.chiral: false}
+  no_recycling: {model.recycles: 0}
+  no_sequence_edges: {model.n_edge_scalar: 0}
+  no_masked_residue: {loss.mask_frac: 0.0, loss.w_seq: 0.0}
+  nearest_probe_loss: {loss.hungarian: false}
+  e3nn_l2: {model.backbone: e3nn, model.lmax: 2}
+  e3nn_l3: {model.backbone: e3nn, model.lmax: 3}

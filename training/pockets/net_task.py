@@ -52,18 +52,33 @@ class EMA:
                 s.mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
 
 
-def losses(out, b, w):
+def losses(out, b, w, res_mask=None):
+    """Weighted multi-task loss. Every pass of a recycled forward is supervised (deep supervision), the last one fully."""
     import torch
-    L = {}
-    L["res"] = M.seg_loss(out["res_logit"], b["y_res"], w["res_pos_weight"])
-    L["occ"] = M.seg_loss(out["occ_logit"], b["y_occ"], w["occ_pos_weight"])
-    reg, conf = M.center_set_loss(out["center"], out["conf_logit"], b["pos"][b["slices"]["probe"]], b["site_centers"])
-    L["center"], L["conf"] = reg / 4.0, conf
-    L["hot"] = M.focal_bce(out["hot_logit"], b["y_hot"])
-    if "prop_logit" in out:
-        L["prop"] = torch.nn.functional.binary_cross_entropy_with_logits(out["prop_logit"], b["y_prop"])
-    total = sum(w[f"w_{k}"] * v for k, v in L.items())
-    return total, {k: float(v) for k, v in L.items()}
+    passes = out.get("passes", [out])
+    L, total = {}, 0.0
+    for i, o in enumerate(passes):
+        last = i == len(passes) - 1
+        scale = 1.0 if last else w.get("recycle_weight", 0.5)
+        part = {}
+        part["res"] = M.seg_loss(o["res_logit"], b["y_res"], w["res_pos_weight"])
+        part["occ"] = M.seg_loss(o["occ_logit"], b["y_occ"], w["occ_pos_weight"])
+        reg, conf = M.center_set_loss(o["center"], o["conf_logit"], o.get("probe_pos", b["pos"][b["slices"]["probe"]]),
+                                      b["site_centers"], hungarian=w.get("hungarian", True))
+        part["center"], part["conf"] = reg / 4.0, conf
+        part["hot"] = M.focal_bce(o["hot_logit"], b["y_hot"])
+        if "prop_logit" in o:
+            part["prop"] = torch.nn.functional.binary_cross_entropy_with_logits(o["prop_logit"], b["y_prop"])
+        if last and res_mask is not None and "seq_logit" in o and "res_type" in b:
+            part["seq"] = M.masked_residue_loss(o["seq_logit"], b["res_type"], res_mask)
+        if last and "size_pred" in o and "site_n_atoms" in b:
+            part["size"] = M.size_loss(o["size_pred"], b["site_n_atoms"])
+        total = total + scale * sum(w.get(f"w_{k}", 0.0) * v for k, v in part.items())
+        if last:
+            L = part
+        else:
+            L.update({f"{k}@{i}": v for k, v in part.items()})
+    return total, {k: float(v.detach()) if hasattr(v, "detach") else float(v) for k, v in L.items()}
 
 
 def predict_sites(out, probe_pos, nms: float = 6.0, max_sites: int = 30):
@@ -147,8 +162,16 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     seed_all(cfg["optim"]["seed"])
     d0 = D.load(files_tr[0])
     in_dims = dict(res=d0["feat_res"].shape[1], probe=d0["feat_probe"].shape[1], surf=d0["feat_surf"].shape[1])
-    mc = cfg["model"]
-    model = M.EquiCaveNet(in_dims, n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1], **mc).to(device)
+    mc = dict(cfg["model"])
+    backbone = mc.pop("backbone", "cartesian")
+    mc["n_edge_scalar"] = d0["edge_scalar"].shape[1] if "edge_scalar" in d0 else 0
+    kw = dict(n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1])
+    if backbone == "e3nn":
+        from training.pockets.model_e3nn import EquiCaveNetE3
+        model = EquiCaveNetE3(in_dims, **{k: v for k, v in mc.items() if k in
+                                          ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout")}, **kw).to(device)
+    else:
+        model = M.EquiCaveNet(in_dims, **mc, **kw).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["optim"]["lr"], weight_decay=cfg["optim"]["weight_decay"])
     E, acc = cfg["optim"]["epochs"], cfg["optim"]["accumulate"]
     steps = E * math.ceil(len(files_tr) / acc); warm = cfg["optim"]["warmup_epochs"] * math.ceil(len(files_tr) / acc)
@@ -162,8 +185,9 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
             b = D.to_torch(D.load(files_tr[j]), device)
             if cfg["optim"]["rotate"]:
                 b = D.random_rotation(b, rng)
+            b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                out = model(b); total, parts = losses(out, b, cfg["loss"])
+                out = model(b); total, parts = losses(out, b, cfg["loss"], res_mask)
             (total / acc).backward()
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0) + v / len(order)
@@ -175,7 +199,8 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
             f"net top1 {ev.get('net_sites', {}).get('top1', float('nan')):.3f} | {time.time() - t0:.0f}s")
         if ev["val_score"] > best or math.isnan(ev["val_score"]):
             best, bad = ev["val_score"], 0; best_state = copy.deepcopy(ema.shadow.state_dict())
-            torch.save(dict(state=best_state, in_dims=in_dims, cfg=cfg, n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1]), out_dir / "model.pt")
+            torch.save(dict(state=best_state, in_dims=in_dims, cfg=cfg, n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1],
+                            n_edge_scalar=mc.get("n_edge_scalar", 0)), out_dir / "model.pt")
         else:
             bad += 1
             if bad >= cfg["optim"]["patience"]:
@@ -188,7 +213,15 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
 def load_model(path, device):
     import torch
     ck = torch.load(path, map_location=device, weights_only=False)
-    m = M.EquiCaveNet(ck["in_dims"], n_hot=ck["n_hot"], n_props=ck["n_props"], **ck["cfg"]["model"]).to(device)
+    mc = dict(ck["cfg"]["model"]); backbone = mc.pop("backbone", "cartesian")
+    mc.setdefault("n_edge_scalar", ck.get("n_edge_scalar", 0))
+    if backbone == "e3nn":
+        from training.pockets.model_e3nn import EquiCaveNetE3
+        m = EquiCaveNetE3(ck["in_dims"], n_hot=ck["n_hot"], n_props=ck["n_props"],
+                          **{k: v for k, v in mc.items() if k in ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout")}).to(device)
+        m.load_state_dict(ck["state"]); m.eval()
+        return m, ck["cfg"]
+    m = M.EquiCaveNet(ck["in_dims"], n_hot=ck["n_hot"], n_props=ck["n_props"], **mc).to(device)
     m.load_state_dict(ck["state"]); m.eval()
     return m, ck["cfg"]
 

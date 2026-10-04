@@ -12,6 +12,9 @@ data:
 split:
   val_fold: 0                            # 5-fold CV by cluster: run once per fold
 model:
+  backbone: cartesian        # cartesian (hand-written l<=2) or e3nn (spherical harmonics, any lmax)
+  lmax: 2                    # e3nn backbone only
+  recycles: 2                # probes are moved to their predicted centres and relinked this many extra times
   dim: 128
   layers: 5
   heads: 8
@@ -25,6 +28,11 @@ model:
   use_probes: true
   dropout: 0.1
 loss:
+  hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
+  mask_frac: 0.15            # self-supervised masked-residue task
+  recycle_weight: 0.5        # weight of the intermediate recycling passes (deep supervision)
+  w_seq: 0.3
+  w_size: 0.1
   w_res: 1.0
   w_occ: 1.0
   w_center: 0.5

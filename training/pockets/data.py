@@ -49,6 +49,30 @@ def backbone_vectors(st: dict, rt: dict) -> np.ndarray:
     return out / np.maximum(norms, 1e-6)
 
 
+SEQ_BUCKETS = (1, 2, 3, 4, 8, 16, 32, 64)     # |i - j| along the chain, bucketed; the last bucket is "far or other chain"
+
+
+def edge_scalars(ei: np.ndarray, types: np.ndarray, res_index: np.ndarray, chain_index: np.ndarray) -> np.ndarray:
+    """Per-edge scalars that distances cannot express: sequence separation bucket and same-chain flag.
+
+    Two residues 4 apart along the chain are a helix turn; two residues from different chains at the same distance are
+    an interface. Without this the network cannot tell those cases apart, since both look identical in geometry.
+    """
+    n_b = len(SEQ_BUCKETS) + 1
+    out = np.zeros((ei.shape[1], n_b + 2), np.float32)
+    src, dst = ei
+    both_res = (types[src] == 0) & (types[dst] == 0)
+    same_chain = both_res & (chain_index[src] == chain_index[dst])
+    sep = np.abs(res_index[src] - res_index[dst])
+    bucket = np.full(ei.shape[1], n_b - 1, int)
+    for b, lim in enumerate(SEQ_BUCKETS):
+        bucket = np.where(same_chain & (sep <= lim) & (bucket == n_b - 1), b, bucket)
+    out[np.arange(ei.shape[1]), np.where(both_res, bucket, n_b - 1)] = 1.0
+    out[:, n_b] = same_chain.astype(np.float32)
+    out[:, n_b + 1] = both_res.astype(np.float32)
+    return out
+
+
 def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     """Edges per ordered node-type pair. `k_scale` < 1 thins the graph (CPU pilots); 1.0 is the training default."""
     src, dst = [], []
@@ -134,9 +158,16 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     pos = np.concatenate([rt["ca"], ppos, spts]).astype(np.float32)
     types = np.concatenate([np.zeros(len(rt["ca"])), np.ones(len(ppos)), np.full(len(spts), 2)]).astype(np.int64)
     ei, et = knn_edges(pos, types, k_scale)
+    n_res_nodes = len(rt["ca"])
+    res_index = np.zeros(len(pos), int); chain_index = np.zeros(len(pos), int)
+    res_index[:n_res_nodes] = np.arange(n_res_nodes)
+    chains = {c: i for i, c in enumerate(dict.fromkeys(rt["chain"].tolist()))}
+    chain_index[:n_res_nodes] = [chains[c] for c in rt["chain"]]
+    res_index[n_res_nodes:] = -10_000; chain_index[n_res_nodes:] = -1
     out = dict(pdb=Path(pdb_path).stem, pos=pos, node_type=types, feat_res=feat_res, feat_probe=feat_probe, feat_surf=feat_surf,
                vec0=np.concatenate([vec_res, vec_probe, vec_surf]).astype(np.float32), edge_index=ei, edge_type=et,
-               n_res=len(rt["ca"]), n_probe=len(ppos), n_surf=len(spts), resid=rt["resid"],
+               edge_scalar=edge_scalars(ei, types, res_index, chain_index),
+               res_type=ridx.astype(np.int64), n_res=n_res_nodes, n_probe=len(ppos), n_surf=len(spts), resid=rt["resid"],
                cand_centers=np.array([c["center"] for c in cands], np.float32).reshape(-1, 3))
     # labels
     if lig_codes is not None:
@@ -152,6 +183,7 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
                        y_hot_proximity=prox.astype(np.float32),
                        site_centers=LB.site_centres(ligs, sites).astype(np.float32),
                        y_prop=np.stack([LB.site_properties([ligs[i] for i in s], entries, xyz) for s in sites]).astype(np.float32),
+                       site_n_atoms=np.array([sum(len(ligs[i]["xyz"]) for i in s) for s in sites], np.float32),
                        site_probe_mask=np.stack([(cKDTree(np.vstack([ligs[i]["xyz"] for i in s])).query(ppos)[0] <= 8.0) for s in sites]).astype(np.float32),
                        lig_xyz=L.astype(np.float32), lig_cls=np.vstack([LB.ligand_atom_classes(l, entries.get(l["comp"])) for l in ligs]).astype(np.float32))
     return out
@@ -169,14 +201,41 @@ def load(path: Path) -> dict:
 def to_torch(d: dict, device="cpu"):
     import torch
     n_res, n_probe = int(d["n_res"]), int(d["n_probe"])
-    b = {k: torch.as_tensor(np.asarray(d[k]), device=device) for k in ("pos", "node_type", "feat_res", "feat_probe", "feat_surf", "vec0", "edge_index", "edge_type")}
+    keys = ["pos", "node_type", "feat_res", "feat_probe", "feat_surf", "vec0", "edge_index", "edge_type"]
+    b = {k: torch.as_tensor(np.asarray(d[k]), device=device) for k in keys}
+    for k in ("edge_scalar", "res_type", "site_n_atoms"):
+        if k in d:
+            b[k] = torch.as_tensor(np.asarray(d[k]), device=device)
     b["slices"] = dict(res=torch.arange(n_res, device=device), probe=torch.arange(n_res, n_res + n_probe, device=device),
                        surf=torch.arange(n_res + n_probe, len(d["pos"]), device=device))
-    for k in ("y_res", "y_occ", "y_hot", "y_hot_proximity", "site_centers", "y_prop", "site_probe_mask"):
+    for k in ("y_res", "y_occ", "y_hot", "y_hot_proximity", "site_centers", "y_prop", "site_probe_mask", "site_n_atoms"):
         if k in d:
             b[k] = torch.as_tensor(np.asarray(d[k]), device=device, dtype=torch.float32)
+    if "res_type" in b:
+        b["res_type"] = b["res_type"].long()
     b["pdb"] = d.get("pdb", "")
     return b
+
+
+def mask_residues(b: dict, frac: float = 0.15, rng=None):
+    """Replace the residue one-hot of a random subset by a mask token (all zeros) and return the mask.
+
+    The masked residues are the targets of the self-supervised `masked_residue_loss`. Only the 21 one-hot columns are
+    cleared; the b-factor and density columns and the ESM-2 block, when present, are cleared too, otherwise the task
+    would be trivially solvable from the embedding.
+    """
+    import torch
+    if frac <= 0 or "res_type" not in b:
+        return b, torch.zeros(len(b["feat_res"]), dtype=torch.bool, device=b["feat_res"].device)
+    g = torch.Generator(device="cpu")
+    if rng is not None:
+        g.manual_seed(int(rng.integers(0, 2 ** 31)))
+    m = torch.rand(len(b["feat_res"]), generator=g).to(b["feat_res"].device) < frac
+    b = dict(b)
+    f = b["feat_res"].clone()
+    f[m] = 0.0
+    b["feat_res"] = f
+    return b, m
 
 
 def random_rotation(b: dict, rng: np.random.Generator):
