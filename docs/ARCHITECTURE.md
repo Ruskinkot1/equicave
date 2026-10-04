@@ -204,30 +204,87 @@ separate arm, so the difference between "invariant" and "blind" is itself a repo
 
 ---
 
+## Stage 2b. Per-point ligandability (`src/equicave/point_score.py`)
+
+A separate, deliberately small model that needs no GPU and answers one question about a **single empty cavity grid
+point**: would a ligand heavy atom sit here? It exists because of a measurement. On the 174 COACH420 structures that
+are not similar to our training set, our candidate set contains the right answer for 0.992 of them against P2Rank's
+0.935, and yet our first prediction is correct less often — we turn 72 % of that ceiling into a correct top-1 where
+P2Rank turns 82 % of its own. Splitting the deficit by the structure's number of sites rules out the obvious
+explanation: 210 of 283 structures have one site, where top-N *is* top-1 and no merging of predictions can change
+anything, and that is where the deficit is largest. The loss is in how a candidate is scored, and the reason is
+visible in Stage 3's feature list: those are means, counts and fractions over a whole cavity, so a small well-formed
+sub-pocket inside a large shallow hole is averaged away. P2Rank does not have that problem because its score is a sum
+over individually classified surface points (credited in `docs/PROVENANCE.md`).
+
+**Inputs per point** (32, all of them distances, counts or fractions, so the whole stage is rotation-invariant by
+construction and `tests/test_point_score.py` asserts it): the seven interaction classes of Stage 3's potential group
+as a partner count within 6 Å, a distance to the nearest partner and a strict flag; the number of classes available,
+the nearest partner of any class and the total partner count; the lattice buriedness of the point itself; the
+distance to the nearest protein heavy atom; atom counts within 6, 8 and 12 Å; the carbon and the N/O fraction within
+8 Å; and the distance to the protein centroid in units of its radius of gyration.
+
+**Labels.** 1 when a heavy atom of a kept ligand really sits within 2 Å of the grid point. Occupancy by a real
+ligand, not a derived ligandability score — the same stance as the hotspot labels, which only count a hotspot where
+the interaction is actually made.
+
+**Aggregation to a candidate** (18 features, the `points` group of Stage 3). The additive sum, which is the part that
+behaves like P2Rank's score and grows with how many points look ligandable; the distribution of the scores (mean,
+standard deviation, median, 90th percentile, maximum, mean of the top decile, and the count and fraction above 0.3,
+0.5 and 0.7); the **largest connected high-scoring blob** by union-find over the grid, which the sum alone cannot
+distinguish from the same total scattered over the cavity, and which is what a real sub-pocket looks like; the point
+count; and the displacement from the candidate centre to the score-weighted centroid, which is both a feature and a
+proposed re-centring (measured separately, since geometric re-centring was already shown not to help DCC).
+
+**Training and leakage.** `scripts/train/build_points.py` collects the rows — about one second per structure, and
+since measured candidates reach 155 points the default cap drops nothing, so the sums the ranker sees are exact.
+`scripts/train/train_point_model.py` fits one gradient-boosted model per 30 %-identity cluster fold and applies each
+to its held-out fold only, so the aggregates handed to the ranker are out of fold and no candidate is ever scored by
+a model that saw its structure. A model fitted on all folds is saved separately, for structures outside the manifest.
+Negatives outnumber positives about six to one and are reweighted by the square root of the ratio rather than
+discarded.
+
+The guard matters here: a ranker trained with these columns and served without a point model would read zeros where
+it learned a signal, which is exactly the failure `pocket_features.check_features` was added for, so the `points`
+group is **not** exempt from it and `rank_sites` raises unless it is given a point model.
+
+---
+
 ## Stage 3. Hybrid ranker (`src/equicave/pocket_features.py`, `scripts/train/train_ranker.py`)
 
-A candidate is described by 109 protein-agnostic numbers in six groups (no external finder scores exist in this project):
+A candidate is described by 118 protein-agnostic numbers in six groups (no external finder scores exist in
+this project), plus three optional groups supplied when their upstream model is available:
 
 - **native** (8): `nat_score`, `nat_rank`, `nat_rel` (score / best score in the structure), `nat_npts`,
   `nat_mean_bur`, `nat_max_bur`, `nat_cavity_npts`, `nat_tier`.
-- **geometry** (8): cavity volume, three principal extents, mean buriedness of a 300-point subsample, volume rank,
-  centrality (‖centre − protein centroid‖ / radius of gyration), depth (distance to the nearest atom).
+- **geometry** (18): cavity volume, three principal extents, mean buriedness of a 300-point subsample, volume rank,
+  centrality (‖centre − protein centroid‖ / radius of gyration), depth (distance to the nearest atom), the spread of
+  the buriedness (standard deviation, 10th and 90th percentiles, the deep and mouth fractions), the width to the
+  nearest atom (mean and maximum), elongation and flatness of the principal extents, and points per unit volume.
 - **chemistry** (14): atom and residue composition within 8 Å — element fractions, backbone fraction, residue count,
   and the fractions of hydrophobic, aromatic, polar, positive, negative, Gly and Pro residues.
 - **shell** (46): the receptor interaction partners the candidate offers in 5, 8 and 12 Å shells — donors, acceptors,
   cations, anions, aromatic ring atoms and hydrophobic carbons, as counts and as fractions of all atoms in the shell —
   plus Kyte-Doolittle hydropathy (mean and sum), b-factor mean and standard deviation, residue counts at 5 and 12 Å,
   the donor/acceptor balance, the charge balance, the polar-to-apolar ratio and donors+acceptors per unit volume.
-- **potential** (21): the interaction-potential field of the candidate's own points. For each point the same geometric
-  tests as the hotspot labels are asked of the *empty* point: is there a receptor acceptor within 3.5 Å (so a donor
-  placed here would be satisfied), a donor within 3.5 Å, a hydrophobic carbon within 4.5 Å, an aromatic ring atom
-  within 5.5 Å, an anion or a cation within 4.0 Å, an acceptor within 3.8 Å for a halogen. The features are the
-  fraction and count of points offering each class, the mean number of classes per point, the fraction of points
-  offering two or three classes at once, the fraction offering both a polar and an apolar partner, the best point, and
-  the volume of the three-class region. This is the physics-free prior that separates a real site from an equally deep
-  but chemically featureless hole, and the geometric counterpart of the learned hotspot field.
+- **potential** (30): the interaction-potential field of the candidate's own points. For each point the same geometric
+  tests as the hotspot labels are asked of the *empty* point: is there a receptor acceptor nearby (so a donor placed
+  here would be satisfied), a donor, a hydrophobic carbon, an aromatic ring atom, an anion or a cation, an acceptor
+  for a halogen. Per interaction class the features are the number of partners within 6 Å, the distance to the
+  nearest one, and a strict flag at hydrogen-bond and salt-bridge distance; on top of those, the mean number of
+  classes per point, the fraction of points offering two or three classes at once, the fraction offering both a polar
+  and an apolar partner, the best point, the volume of the three-class region, the nearest partner of any class and
+  the total partner count. The strict flag alone was the first version of this group and had to be replaced: measured
+  on a real structure every cavity point satisfied every class, because a 4.5–5.5 Å cutoff inside a protein always
+  is, so 21 of the then 109 features were constant and the group could not have shown up in an ablation. This is the
+  physics-free prior that separates a real site from an equally deep but chemically featureless hole, and the
+  geometric counterpart of the learned hotspot field.
 - **context** (2): residue count of the protein, number of candidates in the structure.
-- **network** (3, optional): `net_seg`, `net_center_conf`, `net_hot_mean` from the out-of-fold network.
+- **network** (45, optional): from the out-of-fold network — `net_seg`, `net_center_conf`, `net_hot_mean`,
+  `net_n_centers`, `net_center_dist`, then at 4 Å and 8 Å around the candidate centre the mean and maximum
+  occupancy and confidence, the mean predicted offset and the probe count, and each of the seven hotspot classes
+  separately as mean and maximum at both radii.
+- **points** (18, optional): aggregates of the learned per-point ligandability score; see Stage 2b below.
 - **peptide** (14, for peptide targets): tier, length, width, anisotropy, flatness, exposed receptor backbone N, O and
   Cα counts, side-chain carbon and polar counts, backbone total, backbone-to-side-chain ratio, backbone per point, and
   the distance to the nearest candidate of the other generator.
