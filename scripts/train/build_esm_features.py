@@ -87,9 +87,17 @@ def main():
     df = df.drop(columns=["_mean", "_max"])
     path = tables.write_table(df, ds, f"esm_features_{a.tag}")
     feats = [c for c in df.columns if c.startswith("esm_")]
+    # a projection fitted on everything, saved so inference produces the same columns for a new structure
+    proj = {}
+    for name, A in (("mean", M), ("max", X)):
+        pca = PCA(n_components=a.dims, random_state=0).fit(A)
+        proj[f"{name}_components"] = pca.components_.astype(np.float32)
+        proj[f"{name}_mean"] = pca.mean_.astype(np.float32)
+    np.savez_compressed(ds / f"esm_projection_{a.tag}.npz", **proj)
     (ds / f"esm_features_{a.tag}.json").write_text(json.dumps(dict(model=a.model, radius=a.radius, dims=a.dims,
-                                                                   features=feats, n=len(df)), indent=1))
-    print(f"{len(df)} candidates, {len(feats)} features -> {path.name}")
+                                                                   features=feats, n=len(df),
+                                                                   projection=f"esm_projection_{a.tag}.npz"), indent=1))
+    print(f"{len(df)} candidates, {len(feats)} features -> {path.name}; projection saved for inference")
 
 
 if __name__ == "__main__":

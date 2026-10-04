@@ -83,7 +83,7 @@ def load_set(name, limit, ligand_rule="mlig"):
     return out[:limit] if limit else out
 
 
-def predict_native(st, ranker, net_model, net_cfg, pdb_path):
+def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None):
     cands = detect.detect_sites(st["xyz"])
     if not cands:
         return []
@@ -103,6 +103,9 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path):
             extra = NT.net_features(out, d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]], np.array([c["center"] for c in cands]))
             for r, e in zip(rows, extra):
                 r.update(e)
+    if esm is not None:                       # the ranker was trained with language-model columns
+        for r, ef in zip(rows, esm(pdb_path, np.array([c["center"] for c in cands]))):
+            r.update(ef)
     scores = {"native order": [-r["nat_rank"] for r in rows]}
     if ranker is not None:
         booster, feats = ranker
@@ -131,12 +134,16 @@ def one(task):
     copies = [l["xyz"] for l in ligs]; L = np.vstack(copies); ns = len(sites)
     site_atoms = [np.vstack([ligs[i]["xyz"] for i in s]) for s in sites]
     ranker = pf.load_ranker(args["ranker"]) if args["ranker"] else None
+    esm = None
+    if ranker is not None and any(f.startswith("esm_") for f in ranker[1]):
+        from equicave.esm_features import EsmFeatures
+        esm = EsmFeatures(args.get("esm_tag", "native2"))
     net_model = net_cfg = None
     if args["net"]:
         from training.pockets import net_task as NT
         import torch
         net_model, net_cfg = NT.load_model(args["net"], torch.device("cpu"))
-    preds = predict_native(st, ranker, net_model, net_cfg, path)
+    preds = predict_native(st, ranker, net_model, net_cfg, path, esm)
     out = []
     for p in preds:
         d = pk.dca(p["center"], L)
@@ -157,6 +164,7 @@ def main():
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
+    ap.add_argument("--esm-tag", default="native2", help="which esm_features_<tag> projection to use at inference")
     ap.add_argument("--merge-radii", default="8,12", help="prediction-merging radii to report in addition to as-generated")
     ap.add_argument("--tag", default="", help="suffix for the output files, e.g. _all for the other ligand rule")
     a = ap.parse_args()
@@ -171,7 +179,7 @@ def main():
         except Exception as ex:  # noqa: BLE001
             print(f"  RCSB metadata failed for a batch: {ex}")
     train_cl = {r["cluster30"] for r in csv.DictReader(open(REPO / "data/processed/manifest.csv"))} if (REPO / "data/processed/manifest.csv").exists() else set()
-    args = dict(ranker=a.ranker, net=a.net)
+    args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag)
     with ProcessPoolExecutor(a.jobs) as ex:
         res = list(ex.map(one, [(r, r.get("chain", ""), args) for r in rows], chunksize=2))
     summ = pd.DataFrame([s for s, _ in res]); cand = pd.DataFrame([c for _, cs in res for c in cs])
