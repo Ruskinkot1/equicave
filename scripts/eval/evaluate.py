@@ -7,8 +7,14 @@ sites, report DCA and DCC success at 4 A for top-1, top-3, top-N and top-(N+2) w
 MRR and the candidate ceiling. Predictions are non-redundant (no two centres within 6 A). Bootstrap 95 % CI by
 30 % cluster (RCSB cluster ids fetched for the set) and paired bootstrap of every method against the native order.
 Similarity filter: structures of the set whose 30 % cluster appears in the training manifest are reported separately
-("train-similar") and excluded from the main table; `--deeppocket-rule` additionally applies the DeepPocket convention
-for COACH420 / HOLO4K (ligands as in the `_mlig` lists when present).
+("train-similar"), so the headline row of an external benchmark is the one with those removed.
+
+Ligand rule. COACH420 and HOLO4K are published in two forms: the full list, where every HETATM group that passes the
+solvent/additive filter counts as a site, and the `mlig` ("relevant ligand") list used by P2Rank and DeepPocket, where
+each entry names the ligands that define its sites. `--ligand-rule mlig` (the default when an `_mlig` list exists)
+follows the published convention, `--ligand-rule all` uses every drug-sized HETATM group. The two give different
+numbers, so the rule is printed in the table header and stored in the JSON; papers that do not state theirs are not
+comparable to either.
 
 Usage: python scripts/eval/evaluate.py --set heldout|coach420|holo4k|ligysis|cryptobench [--ranker models/ranker_native.txt]
        [--net runs/training/pockets-net/full_fold0_seed0/model.pt] [--external fpocket,p2rank] [--limit N] [--jobs 4]
@@ -38,7 +44,8 @@ def fetch(pdb):
     return f if f.exists() and f.stat().st_size > 1000 else None
 
 
-def load_set(name, limit):
+def load_set(name, limit, ligand_rule="mlig"):
+    """Rows of a benchmark. With `ligand_rule='mlig'` the ligand codes of the published relevant-ligand list are used."""
     if name == "heldout":
         rows = [dict(pdb=t["pdb"], chain="", ligand_codes=t["lig"], note=k) for k, t in targets.TARGETS.items()]
     else:
@@ -46,6 +53,19 @@ def load_set(name, limit):
         if not f.exists():
             sys.exit(f"{f} missing: run scripts/data/fetch_eval_sets.py")
         rows = [r for r in csv.DictReader(open(f)) if r["pdb"]]
+        mlig = EXT / f"{name}_mlig.csv"
+        if ligand_rule == "mlig" and mlig.exists():
+            codes = {(r["pdb"], r["chain"]): r["ligand_codes"] for r in csv.DictReader(open(mlig)) if r["ligand_codes"]}
+            keep = []
+            for r in rows:
+                c = codes.get((r["pdb"], r["chain"]))
+                if c is None and not r["chain"]:
+                    c = next((v for (p, _), v in codes.items() if p == r["pdb"]), None)
+                if c:
+                    keep.append(dict(r, ligand_codes=c, note=(r.get("note", "") + " mlig").strip()))
+            if keep:
+                print(f"  relevant-ligand rule: {len(keep)} of {len(rows)} entries are in {mlig.name}")
+                rows = keep
     seen, out = set(), []
     for r in rows:
         key = (r["pdb"], r["chain"])
@@ -119,8 +139,10 @@ def main():
     ap.add_argument("--set", required=True); ap.add_argument("--ranker", default=""); ap.add_argument("--net", default="")
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
+    ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
+    ap.add_argument("--tag", default="", help="suffix for the output files, e.g. _all for the other ligand rule")
     a = ap.parse_args()
-    rows = load_set(a.set, a.limit)
+    rows = load_set(a.set, a.limit, a.ligand_rule)
     print(f"{a.set}: {len(rows)} entries", flush=True)
     ids = sorted({r["pdb"] for r in rows})
     meta = {}
@@ -162,14 +184,21 @@ def main():
             results.setdefault("all", {})[f"{tool} (DCA)"] = M.summarize(M.per_structure(ext.assign(s=-ext["tool_rank"]), "s"))
         else:
             print(f"  external table {f.name} not found; skipped")
-    lines = [f"# Evaluation: {a.set}", "", f"{(summ.status == 'ok').sum()} structures evaluated, skipped: {summ.status.value_counts().to_dict()}", "",
+    lines = [f"# Evaluation: {a.set}", "",
+             f"{(summ.status == 'ok').sum()} structures evaluated, skipped: {summ.status.value_counts().to_dict()}. "
+             f"Ligand rule: {a.ligand_rule} ({'published relevant-ligand list' if a.ligand_rule == 'mlig' else 'every drug-sized HETATM group'}). "
+             f"Success is DCA (or DCC) <= 4 A; N is the structure's own number of ligand sites; predictions are "
+             f"non-redundant (6 A). The headline row is **not train-similar**: structures sharing a 30 %-identity "
+             f"cluster with the training manifest are listed separately.", "",
              "| subset | method | top-1 | top-3 | top-N | top-(N+2) | MRR | n | ceiling |", "|---|---|---|---|---|---|---|---|---|"]
     for subset, d in results.items():
         for m, st in d.items():
             lines.append(f"| {subset} | {m} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | {M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} |")
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    (out / f"eval_{a.set}.md").write_text("\n".join(lines) + "\n"); (out / f"eval_{a.set}.json").write_text(json.dumps(dict(set=a.set, n=len(rows), status=summ.status.value_counts().to_dict(), results=results), indent=1))
-    cand.to_csv(REPO / "data/processed" / f"eval_candidates_{a.set}.csv", index=False)
+    (out / f"eval_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
+    (out / f"eval_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, ligand_rule=a.ligand_rule, n=len(rows),
+        status=summ.status.value_counts().to_dict(), results=results), indent=1))
+    cand.to_csv(REPO / "data/processed" / f"eval_candidates_{a.set}{a.tag}.csv", index=False)
     print("\n".join(lines))
 
 
