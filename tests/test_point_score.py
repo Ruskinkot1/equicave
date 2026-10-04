@@ -96,3 +96,30 @@ def test_aggregates_can_be_produced_for_real_candidates_at_inference():
     assert len(rows) == len(cands)
     assert all(sorted(r) == sorted(pf.POINT_AGG) for r in rows)
     assert all(r["pts_max"] == pytest.approx(0.75) for r in rows if r["pts_n_points"])
+
+
+def test_the_interaction_columns_are_not_swapped():
+    """Column j of every potential block must be POT_SPEC[j]; a swap would mislabel 51 features without any symptom.
+
+    The test asks the chemistry directly: a lone receptor acceptor 3 A away satisfies a *donor* placed at the point
+    (the `hbd` channel) and, at 3.5 A, a halogen; it says nothing about a donor being available, so `hba` stays 0.
+    """
+    assert list(pf.POT_CLASSES) == [n for n, _ in pf.POT_SPEC]
+    names = [n for n, _ in pf.POT_SPEC]
+    trees = {k: None for k in ("donor", "acceptor", "cation", "anion", "aromatic", "hydrophobic")}
+    trees["acceptor"] = cKDTree(np.array([[3.0, 0.0, 0.0]]))
+    C, D, A = pf.point_potential(np.zeros((1, 3)), trees)
+    assert A[0][names.index("hbd")] == 1 and C[0][names.index("hbd")] == 1
+    assert A[0][names.index("halogen")] == 1
+    assert A[0][names.index("hba")] == 0 and C[0][names.index("hba")] == 0
+    assert all(A[0][names.index(n)] == 0 for n in ("hydrophobic", "aromatic", "cation", "anion"))
+    assert D[0][names.index("hbd")] == pytest.approx(3.0)
+
+    # the same ordering must hold in the per-point feature row the model consumes
+    xyz = ball_with_pocket()
+    X = features_for(xyz, np.array([[0.0, 0.0, 6.0]]))
+    for j, name in enumerate(names):
+        assert ps.POINT_FEATURES[j] == f"p_n_{name}"
+        assert ps.POINT_FEATURES[len(names) + j] == f"p_d_{name}"
+        assert ps.POINT_FEATURES[2 * len(names) + j] == f"p_s_{name}"
+    assert X.shape[1] == len(ps.POINT_FEATURES)
