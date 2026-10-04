@@ -20,7 +20,7 @@ full-PDB scale costs time rather than disk.
 |---|---|---|---|
 | `manifest.csv` | 1499 (1367 usable) | 1017 | the measured results use this |
 | `manifest_big.csv` | 3965 | 2824 | built 2026-10-04; 2076 clusters new; candidates building |
-| `manifest_max.csv` | every matching RCSB entry (124 332 inspected, ≤ 3 per cluster) | expected > 10 000 | building |
+| `manifest_max.csv` | **11 671** (60 000 entries inspected, ≤ 3 per cluster) | **6223** | built 2026-10-04; folds 2349 / 2415 / 2384 / 2178 / 2345 |
 
 The RCSB query behind all three: X-ray, resolution ≤ 2.5 Å, protein-only polymers, ≤ 8 polymer instances, at least
 one non-polymer ligand of 150-900 Da that is not a solvent, buffer, ion, sugar or detergent.

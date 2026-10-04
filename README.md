@@ -37,9 +37,14 @@ removed from training *and* from this cross-validation, so nothing here is memor
 |---|---|---|---|---|
 | detector order | 0.516 [0.465, 0.565] | 0.641 | 0.812 | 0.654 |
 | most buried first | 0.352 | 0.525 | 0.766 | 0.549 |
-| **LambdaRank, 109 features + z-scores** | **0.782 [0.740, 0.823]** | **0.835** | **0.925** | 0.848 |
-| **the same, seed ensemble** | **0.792 [0.750, 0.832]** | **0.845 [0.808, 0.880]** | **0.928 [0.903, 0.953]** | 0.853 |
-| the same, isotonically calibrated | 0.787 | 0.847 | 0.928 | 0.852 |
+| LambdaRank, 109 features + z-scores | 0.782 [0.740, 0.823] | 0.835 | 0.925 | 0.848 |
+| the same, seed ensemble | 0.792 [0.750, 0.832] | 0.845 [0.808, 0.880] | 0.928 [0.903, 0.953] | 0.853 |
+| **+ ESM-2 features (288 columns)** | **0.809 [0.770, 0.847]** | **0.856 [0.820, 0.890]** | **0.928 [0.903, 0.953]** | **0.867** |
+
+The language-model features are worth **+0.017 top-1 and +0.011 top-N** over the same model without them, which
+matches the literature's finding that protein-language-model features buy more than any single architectural choice.
+They are aggregated over the residues lining each candidate and reduced by a PCA fitted out of fold, so a tree model
+can use them; no GPU and no trained network is involved.
 
 Candidate ceiling 0.988. Calibration: expected calibration error 0.004 after isotonic regression against 0.034 for a
 plain sigmoid of the score, with mean predicted 0.1805 against a base rate of 0.1806. The gain over the detector
