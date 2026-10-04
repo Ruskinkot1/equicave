@@ -11,37 +11,64 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 | `methods_comparison.md` / `.json` | `scripts/eval/compare_methods.py` | native, fpocket and P2Rank candidates on the same structures, each with and without the learned ranker |
 | `eval_<set>.md` / `.json` | `scripts/eval/evaluate.py` | one benchmark under the shared protocol; `train-similar` structures are a separate row |
 | `ablations.md` / `.json` | `scripts/train/collect_ablations.py` | the network ablation grid, mean ± seed sd, paired against `full` |
-| `compare_<set>.md` / `.json` | `scripts/eval/compare_on_set.py` | us against external tools on one benchmark, same structures, split by site count |
+| `compare_<set><tag>.md` / `.json` | `scripts/eval/compare_on_set.py` | us against external tools on one benchmark, same structures and same receptor protocol, split by site count |
 
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
-## Open discrepancy: the cleaned-subset number does not transfer to COACH420
+## Resolved: the benchmark numbers were measured on a receptor the model was never trained on
 
-The ranker trained on the 432 cleaned structures reaches 0.806 top-1 in its own cross-validation (0.810 calibrated)
-and **0.637** on the 179 comparable COACH420 structures -- below the detector's own ordering there (0.642), and
-below the 0.704 that an older model with 32 features reached on the same subset
-(`docs/results/eval_coach420_n3.md` against `docs/results/eval_coach420.md`). Two things changed at once between
-those two models, so the gap is not yet attributable: the feature count (32 to 236 with z-scores) and the training
-set (all 1367 manifest structures to the 432 that share no 30 %-identity cluster with any benchmark). A model with
-236 columns fitted on 432 structures may simply be data-starved, in which case the cleaned-subset
-cross-validation is measuring a model that cannot be served.
+**Cause.** Every COACH420 entry names a chain and `evaluate.py` passed it to `read_pdb` as a receptor filter, while
+the candidate table is built on every chain. A truncated receptor moves the protein centroid and radius of gyration,
+changes the residue and candidate counts, empties the 5/8/12 A shells of a neighbouring chain's atoms, and unburies
+every pocket at a chain interface -- so `centrality`, the 46 shell features, the native ranks and every
+within-structure z-score were computed in a context the model had never seen. `scripts/baselines/run_external.py`
+gives the external tools every chain, so the truncation also biased the head-to-head against us. Fixed:
+`--receptor-chains` defaults to `all`, with `entry` kept to reproduce the old behaviour.
 
-A silent serving bug is ruled out: the 118 features assembled at inference were compared against the stored
-training table for 180 candidates of six structures and agree exactly (maximum absolute difference 0 across every
-column), so the model is served the values it was trained on.
+The signature that identifies the cause rather than merely correlating with it: under the mismatch every rich ranker
+scored *below* doing no ranking at all, and the damage grew with how much context the feature set uses, while the
+detector's own context-free score was identical in every run. Correcting the receptor reverses the ordering.
 
-The remaining candidate cause, besides training-set size, is in the protocol itself. The cleaned subset is not a
-random subsample: it is **selected** as the structures sharing no 30 %-identity cluster with any benchmark, so a
-cross-validation inside that pool trains and tests on families chosen for being unlike the benchmarks, and measures
-generalisation within an unusual pool rather than to a benchmark. If that is the explanation, then 0.806 was never a
-benchmark prediction and 0.637 is the honest out-of-family number -- and the protocol that gives both an honest and
-a usable figure is to train on the whole manifest and report the benchmark structures that are not train-similar,
-which is leakage-free because those structures are absent from training by construction.
+**COACH420, 174 structures not similar to our training manifest, both sides on the full assembly:**
 
-Until that is separated, **the cleaned-subset top-1 figures should not be read as benchmark performance.** The runs
-that separate them -- the same 272-column feature set trained on all 1367 structures, with and without the
-per-point group, evaluated on the same COACH420 subset -- are in progress.
+| model | features | top-1 | top-N | top-(N+2) | ceiling |
+|---|---|---|---|---|---|
+| detector order | — | 0.598 | 0.713 | 0.822 | 0.989 |
+| `ranker_native` | 32 | **0.701** | **0.776** | 0.874 | 0.989 |
+| `ranker_native3_full` | 236 | 0.642 | 0.726 | 0.855 | 0.989 |
+| `ranker_native3_full_points` | 272 | 0.626 | 0.704 | 0.855 | 0.989 |
+| P2Rank 2.5.1 | — | 0.753 | 0.828 | 0.879 | 0.931 |
+
+Paired cluster bootstrap of the 32-feature model against P2Rank: top-1 -0.052 [-0.121, +0.011], top-N
+-0.052 [-0.121, +0.017], top-(N+2) -0.006 [-0.059, +0.046]. **All three intervals include zero**, so on the
+corrected protocol we are not distinguishable from P2Rank on any of the three, against a significant top-N deficit
+of -0.086 [-0.169, -0.006] under the broken one. At three or more sites we match it exactly (+0.000 on 40
+structures).
+
+## Second finding: our feature engineering does not transfer, and cluster-fold cross-validation cannot see it
+
+The same table read down the feature column is the uncomfortable result. More features give monotonically **better**
+cross-validation and monotonically **worse** benchmark transfer:
+
+| features | cross-validated top-1 | COACH420 top-1 |
+|---|---|---|
+| 32 | — (not re-measured on this table) | 0.701 |
+| 236 | 0.787 [0.764, 0.808] | 0.642 |
+| 272 (+ per-point) | 0.796 [0.774, 0.818] | 0.626 |
+
+The per-point ligandability group is the clearest case: it is the most valuable group in the ablation (+0.019 top-1
+on the cleaned subset, +0.009 on the full manifest, worth more than the 46 shell columns) and it **costs** 0.016
+top-1 on the benchmark. Splitting by 30 %-identity cluster controls sequence similarity between folds; it does not
+make a fold a sample of COACH420. Our manifest is built to its own criteria -- resolution limits, ligand size and
+type rules, a cap of entries per cluster -- so a rich model can exploit regularities that every fold shares and the
+benchmark does not, and the cross-validation will not report it.
+
+The consequence for the project: **feature groups must be accepted or rejected on benchmark transfer, not on
+cross-validated top-1.** The cross-validated numbers remain the right way to measure whether a group carries
+information; they are not evidence that it will help on a benchmark, and in these three cases they pointed the wrong
+way. The per-point model's own out-of-fold point AUROC of 0.865 is unaffected by this -- that is a measurement about
+points, not a claim about ranking transfer.
 
 ## Negative results worth keeping
 
@@ -62,7 +89,9 @@ the first prediction is usually a different pocket, not a near miss. This is the
 re-centring, after the earlier one showing six centre definitions all within noise for DCC.
 
 **Merging our predictions cannot close the gap to P2Rank on COACH420** (measured 2026-10-04,
-`docs/results/compare_coach420.md`). We emit 30 predictions per structure to P2Rank's 9.6 and lose top-N by
+`docs/results/compare_coach420.md`; measured under the single-chain receptor mismatch, so the deficit it refutes an
+explanation for was itself overstated — the conclusion survives because it rests on the N = 1 split, which the
+protocol does not affect). We emit 30 predictions per structure to P2Rank's 9.6 and lose top-N by
 0.086 [0.006, 0.169] on the 174 structures that are not similar to our training set, so the obvious reading was
 that fragments of one pocket consume the top-N budget and that merging nearby predictions would recover it.
 Splitting the same comparison by the structure's own number of sites refutes it: 210 of the 283 structures have

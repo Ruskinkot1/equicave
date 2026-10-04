@@ -50,10 +50,12 @@ def main():
     ap.add_argument("--tools", nargs="*", default=["p2rank", "fpocket"])
     ap.add_argument("--ours", nargs="+", default=["ranker", "native order"], help="score columns in our eval table")
     ap.add_argument("--ref", default="", help="method to take paired differences against (default: the first tool)")
+    ap.add_argument("--tag", default="", help="suffix of the eval_candidates_<set><tag>.csv to read, as passed to "
+                    "evaluate.py --tag; the receptor protocol must match the baselines', which see every chain")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
     a = ap.parse_args()
 
-    ours = pd.read_csv(DS / f"eval_candidates_{a.set}.csv")
+    ours = pd.read_csv(DS / f"eval_candidates_{a.set}{a.tag}.csv")
     train_cl = train_clusters()
     if "cluster30" not in ours:
         ours["cluster30"] = ours["pdb"]
@@ -157,9 +159,9 @@ def main():
                                  f"{o.topN.mean() - r.topN.mean():+.3f} | {o.ceiling.mean():.3f} | {r.ceiling.mean():.3f} |")
 
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    (out / f"compare_{a.set}.md").write_text("\n".join(lines) + "\n")
+    (out / f"compare_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
     clean = {s: {m: {k: v for k, v in st.items() if k != "_per"} for m, st in d.items()} for s, d in results.items()}
-    (out / f"compare_{a.set}.json").write_text(json.dumps(dict(set=a.set, n_common=len(common), ref=ref, results=clean), indent=1))
+    (out / f"compare_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, n_common=len(common), ref=ref, results=clean), indent=1))
     print("\n".join(lines))
 
 

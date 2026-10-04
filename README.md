@@ -50,10 +50,10 @@ that a 4.5–5.5 Å cutoff inside a protein always satisfies, so 21 of the then 
 ablation could have shown it — is now third. Dropping the points group reproduces the independent 118-feature run
 (0.787 against 0.788), which is the consistency check on the two runs.
 
-> **These are cross-validation figures on the cleaned subset and do not transfer to COACH420**, where the same model
-> reaches 0.637. Training-set size and feature count both changed between the models being compared there; the runs
-> that separate the two are in progress. See the open discrepancy in `docs/results/README.md` before quoting any
-> number in this section.
+> **These are cross-validation figures and they do not predict benchmark performance.** The same 272-feature model
+> reaches 0.626 top-1 on COACH420, below the 32-feature model's 0.701, while cross-validation ranks them the other
+> way round. Cluster-fold cross-validation measures whether a feature group carries information, not whether it
+> transfers; see the second finding in `docs/results/README.md` before quoting any number in this section.
 
 Earlier rows below were measured with the 109-feature table and are kept for comparison.
 Structures sharing a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family are
@@ -87,29 +87,37 @@ order is +0.275 top-1 [+0.228, +0.329] by paired cluster bootstrap.
 | EquiCave + LambdaRank (118 features) | rebuilding | rebuilding |
 | EquiCave + network | not run (needs a GPU) | not run |
 
-### COACH420 head-to-head, identical structures (`scripts/eval/compare_on_set.py`)
-283 structures predicted by both methods, same ligand list and same labels. `not train-similar` excludes the
-structures sharing a 30 %-identity cluster with our training manifest; that is leakage for us and not for P2Rank,
-whose own training overlap with COACH420 this table does not measure, so it is the row to read for us.
+### COACH420 head-to-head, identical structures and identical receptors (`scripts/eval/compare_on_set.py`)
+174 structures predicted by both methods and not sharing a 30 %-identity cluster with our training manifest; both
+sides see the full assembly, which is what the candidate table is built from and what the baseline wrappers pass to
+the external tools.
 
-| subset | method | predictions | ceiling | top-1 | top-N | top-(N+2) |
-|---|---|---|---|---|---|---|
-| not train-similar (174) | **EquiCave + ranker** | 29.9 | **0.992** | 0.707 [0.635, 0.773] | 0.741 [0.673, 0.807] | **0.908** [0.862, 0.948] |
-| not train-similar (174) | P2Rank 2.5.1 | 9.6 | 0.931 | **0.753** [0.688, 0.814] | **0.828** [0.771, 0.881] | 0.879 [0.830, 0.926] |
-| all (283) | EquiCave + ranker | 30.0 | 0.989 | 0.753 | 0.781 | 0.915 |
-| all (283) | P2Rank 2.5.1 | 8.4 | 0.940 | 0.770 | 0.841 | 0.905 |
+| method | predictions | ceiling | top-1 | top-N | top-(N+2) |
+|---|---|---|---|---|---|
+| detector order, no ranker | 30.0 | **0.989** | 0.598 | 0.713 | 0.822 |
+| **EquiCave + ranker (32 features)** | 30.0 | **0.989** | 0.701 [0.630, 0.770] | 0.776 [0.712, 0.839] | 0.874 [0.821, 0.924] |
+| EquiCave + ranker (236 features) | 30.0 | **0.989** | 0.642 | 0.726 | 0.855 |
+| EquiCave + ranker (272, + per-point) | 30.0 | **0.989** | 0.626 | 0.704 | 0.855 |
+| P2Rank 2.5.1 | 9.6 | 0.931 | 0.753 [0.688, 0.814] | 0.828 [0.771, 0.881] | 0.879 [0.830, 0.926] |
+| EquiCave + network | not run (needs a GPU) | | | | |
 
-Paired cluster bootstrap on the comparable subset: top-1 −0.046 [−0.133, +0.035], top-N −0.086 [−0.169, −0.006],
-top-(N+2) +0.029 [−0.030, +0.083]. So we are indistinguishable on top-1 and top-(N+2) and behind on top-N.
+Paired cluster bootstrap, our best model against P2Rank: top-1 −0.052 [−0.121, +0.011], top-N −0.052 [−0.121,
++0.017], top-(N+2) −0.006 [−0.059, +0.046]. **All three include zero**: on this protocol the two are not
+distinguishable on any of the three metrics. At three or more sites per structure they are equal (+0.000 on 40
+structures).
 
-**Honest state:** detection is not the bottleneck and has not been for some time — our candidate set contains the
-answer for 0.992 of those structures against P2Rank's 0.935. The bottleneck is first-rank accuracy: we convert 72 %
-of our ceiling into a correct first prediction where P2Rank converts 82 % of its own. The obvious explanation,
-that our 30 predictions fragment one pocket and eat the top-N budget, is **measured and false**: 210 of the 283
-structures have one site, where top-N is top-1 and merging predictions cannot change anything, and that is where
-the deficit is largest (`docs/results/README.md`). Two things address it and neither has been measured yet on a
-benchmark — the per-point ligandability score (Stage 2b, in place, CPU-only) and the network's own per-probe
-segmentation and confidence, which has never been trained because it needs a GPU.
+**Honest state.** Detection is not the bottleneck: our candidate set contains the answer for 0.989 of these
+structures against P2Rank's 0.931. Ranking is, and two results frame it:
+
+1. **An earlier version of this table was wrong.** Evaluation was reading only the chain each benchmark row names
+   while the model was trained on the whole assembly, so centrality, the 46 shell features, the native ranks and the
+   z-scores were all served in a context the model had never seen — and the baselines were given the full assembly.
+   Under that mismatch every rich ranker scored below doing no ranking at all. Fixed; `docs/results/README.md`
+   carries the diagnosis and the evidence.
+2. **More features give better cross-validation and worse benchmark transfer.** 32 features reach 0.701 here,
+   236 reach 0.642, 272 reach 0.626 — while cross-validated top-1 moves the other way, 0.787 to 0.796. Splitting
+   folds by 30 %-identity cluster controls sequence similarity; it does not make a fold a sample of COACH420. Feature
+   groups are therefore accepted on benchmark transfer in this project, not on cross-validated top-1.
 
 ### Held-out drug targets (12 families, excluded from training by cluster and UniProt)
 | method | DCA top-1 | DCA top-(N+2) | DCC top-1 | ceiling |

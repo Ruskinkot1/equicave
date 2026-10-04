@@ -21,7 +21,17 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
 4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
    with the property head.
-5. **A diagnosis of where pocket detection actually fails, and a per-point remedy for it.** On the COACH420
+5. **Two methodological results about measuring pocket detection**, both of which cost us numbers we had already
+   written down. (a) Evaluating on the chain a benchmark row names, while training on the whole assembly, destroys
+   every context-dependent feature and makes a rich ranker score below no ranking at all; the baselines are given
+   the assembly, so it also biases the comparison. Under the corrected protocol our best model is not
+   distinguishable from P2Rank on top-1, top-N or top-(N+2) (all three paired intervals include zero). (b) Splitting
+   folds by 30 %-identity cluster controls sequence similarity but does not make a fold a sample of a benchmark:
+   across three feature sets, cross-validated top-1 and benchmark top-1 move in **opposite** directions, so a
+   feature group cannot be accepted on cross-validation alone. Both are reported as findings because every
+   published comparison in this field faces them.
+6. **A diagnosis of where pocket detection actually fails, and a per-point remedy for it** (the remedy raises
+   cross-validated ranking and does not transfer -- see (b) above). On the COACH420
    structures that are not similar to our training set, our candidate set contains the right answer for 0.992 of
    them against P2Rank's 0.935, and we still lose top-N: we convert 72 % of our ceiling into a correct first
    prediction where P2Rank converts 82 %. Three candidate explanations are measured and two are refuted --
@@ -32,7 +42,7 @@ papers are never compared directly to ours: every baseline is re-run on our spli
    2.3 M cavity grid points, whose single best aggregate ranks candidates at 0.741 top-1 against the geometric
    score's 0.473. A second-stage cascade over the top candidates, the other obvious remedy, is also measured and
    also fails -- reported, because the negative results are part of the contribution.
-6. **Peptide-binder sites as a first-class problem**: a groove candidate tier with backbone-exposure features and a
+7. **Peptide-binder sites as a first-class problem**: a groove candidate tier with backbone-exposure features and a
    homology-controlled peptide-site benchmark built from RCSB (973 complexes, 685 receptor clusters, disjoint from the
    small-molecule training clusters). First result: cavity candidates already reach a high ceiling on peptide sites, so
    the limiting factor is ranking, not detection.
@@ -47,7 +57,8 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 | C5 | property classes and the hotspot field beat geometry-only and tabular baselines on held-out clusters | per-class AUROC/AP, ECE, enrichment of ligand atoms in top-k % points, permutation control | no gain |
 | C8 | interaction-validated hotspot labels train a better field than proximity labels | the same network trained on `y_hot` and on `y_hot_proximity`, both scored against the validated target | no difference |
 | C6 | peptide-specific features (groove shape + backbone exposure) improve peptide-site ranking | peptide benchmark, feature-group ablation | CI of the gain includes 0 |
-| C9 | the per-point ligandability aggregates raise the ranker beyond the 118 pocket features | the group added, feature-group ablation and paired cluster bootstrap on the cleaned subset, then COACH420 with and without it | CI includes 0 |
+| C9 | the per-point ligandability aggregates raise the ranker beyond the 118 pocket features | the group added, feature-group ablation and paired cluster bootstrap, then COACH420 with and without it | **failed on the benchmark**: +0.019 cross-validated top-1, -0.016 on COACH420; the group carries information and does not transfer |
+| C10 | feature groups accepted on cross-validated top-1 transfer to a benchmark | every model evaluated on COACH420 under the matched receptor protocol | **failed**: 32 features 0.701, 236 0.642, 272 0.626 on the benchmark while cross-validation ranks them in the opposite order |
 | C7 | the model generalises across benchmarks | COACH420, HOLO4K, LIGYSIS, CryptoBench, held-out families, one protocol, train-similar structures separated | macro-average below the re-run baselines |
 
 ## Protocol requirements adopted from the 2026-10-04 survey
