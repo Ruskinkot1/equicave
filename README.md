@@ -60,9 +60,17 @@ Peptide chains are removed from the input. Cavity candidates reach ~0.94 ceiling
 peptide sites detection is not the bottleneck — ranking is. Full table: `docs/results/`.
 
 ### Published numbers of other methods
-In `docs/LITERATURE.md`, quoted from the papers and marked as such. They are **not** comparable to the table above:
-different ligand filters, chain handling and splits. The comparison we trust is `scripts/baselines/run_external.py`,
-which re-runs fpocket and P2Rank on our structures with our labels.
+In `docs/LITERATURE.md` and `docs/LITERATURE_SURVEY.md`, quoted from the papers and marked as such. They are **not**
+comparable to the table above, and the survey shows how badly: fpocket, a fixed deterministic program, is reported at
+56.4 %, 35.1 % and 22.8 % on "COACH420" by three different papers, because the ligand filter and chain handling
+differ. 40 % of HOLO4K and 56 % of COACH420 structures even differ in chain count between the asymmetric and the
+biological unit, and one 2026 paper excluded COACH420 outright because most of it was already in its training data.
+So we re-run every baseline ourselves (`scripts/baselines/run_external.py`) and never copy a published row.
+
+Protocol consequences we adopt from the independent LIGYSIS comparison: report top-N **and** top-(N+2), report DCC at
+4 Å **and** 10-12 Å (4 Å is too strict for large ligands, and the reported advantage of equivariant detectors is
+concentrated in DCC), report a **redundancy statistic** (67 % of one published method's predictions pointed at a site
+it had already found), state the ligand rule and the resulting counts, and separate train-similar structures.
 
 ## Install and train
 

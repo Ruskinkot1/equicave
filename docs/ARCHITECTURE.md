@@ -77,10 +77,13 @@ sites; the ranking is**, and the groove tier contributes features rather than co
 ## Stage 2. EquiCave-Net (`training/pockets/model.py`)
 
 An SO(3)-equivariant message-passing network over a **heterogeneous** graph, written from scratch in plain PyTorch
-(no e3nn, no torch_geometric, no copied code). What makes it different from published pocket models: probe nodes sit
-on **real cavity points** rather than on a sphere, a **surface point cloud** is a first-class node type, and every node
-carries **degree-2 tensor channels** with geometric tensor attention (GotenNet-style), which has not been applied to
-binding-site detection before.
+(no e3nn, no torch_geometric, no copied code). What makes it different from published pocket models: probe nodes sit on
+**real cavity points** rather than on a sphere, a **surface point cloud** is a first-class node type, and every node
+carries **degree-2 tensor channels** with geometric tensor attention (GotenNet-style). Degree-2 tensor attention for
+pockets is *not* new as of 2026: GDEGAN (arXiv:2603.19817) applies GotenNet with l=2 and ESM-2 to this task. What is
+missing from the literature, and what the ablation grid here provides, is the **controlled isolation** of that
+contribution: GDEGAN has no lmax ablation, and no equivariant-versus-invariant comparison at equal depth, width and
+features exists for pocket detection at all (`docs/LITERATURE_SURVEY.md`).
 
 ### 2.1 Node types and inputs (`training/pockets/data.py`)
 | type | nodes | scalar features | initial vectors `vec0` |

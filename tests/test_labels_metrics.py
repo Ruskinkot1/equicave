@@ -107,3 +107,16 @@ def test_classification_metrics():
     assert M.enrichment_at(y, s, 0.5) == 2.0
     obs, p = M.permutation_control(y, s, M.auroc, n=50)
     assert obs == 1.0 and p < 0.2
+
+
+def test_redundancy_statistic():
+    # structure a: three predictions, the first two both hit site 0, the third hits site 1 -> one redundant of three
+    df = pd.DataFrame(dict(pdb=["a"] * 3, cluster30=["x"] * 3, n_sites=[2] * 3,
+                           label=[1, 1, 1], site_idx=[0, 0, 1], s=[3.0, 2.0, 1.0]))
+    r = M.redundancy(df, "s")
+    assert r["n_hitting_predictions"] == 3 and r["n_redundant"] == 1
+    assert abs(r["fraction"] - 1 / 3) < 1e-9
+    # no hits at all: the fraction is undefined, not zero
+    import numpy as np
+    empty = df.assign(label=0)
+    assert np.isnan(M.redundancy(empty, "s")["fraction"])

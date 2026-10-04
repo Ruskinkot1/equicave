@@ -87,6 +87,37 @@ def permutation_control(y: np.ndarray, s: np.ndarray, fn, n: int = 100, seed: in
     return float(obs), float((null >= obs).mean())
 
 
+def redundancy(df: pd.DataFrame, score_col: str, site_col: str = "site_idx", label_col: str = "label",
+               top: int | None = None) -> dict:
+    """How many predictions point at a site another, better-ranked prediction already found.
+
+    The LIGYSIS comparison showed this dominates the apparent ranking of pocket methods: 67 % of VN-EGNN's
+    predictions were redundant (one site predicted up to seven times), and removing redundancy moved several methods
+    by 5-13 points of recall. A method that reports no redundancy statistic cannot be compared with one that does, so
+    we report it for ourselves: `fraction` of hitting predictions that are repeats, and `sites_per_hit_prediction`.
+    `top=n` restricts the count to the first n predictions per structure (n = n_sites + 2 is the useful case).
+    """
+    rep = hit = 0
+    for _, g in df.groupby("pdb", sort=False):
+        g = g.sort_values(score_col, ascending=False, kind="stable")
+        if top is not None:
+            n = int(g["n_sites"].iloc[0]) if "n_sites" in g else 1
+            g = g.head(top if isinstance(top, int) else n + 2)
+        seen = set()
+        for _, r in g.iterrows():
+            if not r[label_col]:
+                continue
+            hit += 1
+            s_i = r.get(site_col)
+            if s_i in seen:
+                rep += 1
+            else:
+                seen.add(s_i)
+    return dict(n_hitting_predictions=int(hit), n_redundant=int(rep),
+                fraction=float(rep / hit) if hit else float("nan"),
+                sites_per_hit_prediction=float((hit - rep) / hit) if hit else float("nan"))
+
+
 def summarize(per: pd.DataFrame, cols=("top1", "top3", "topN", "topN2", "mrr")) -> dict:
     out = {}
     for c in cols:

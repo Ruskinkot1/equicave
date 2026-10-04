@@ -10,9 +10,11 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 1. **A pocket model with no external dependencies.** Candidates, features, network and ranker all come from the
    structure alone; no P2Rank, fpocket or Java at training or inference. The native generator reaches a **0.977**
    candidate ceiling on 1367 RCSB structures at 30 candidates per structure.
-2. **Geometric tensor attention for binding-site detection.** Degree-0/1/2 Cartesian channels with invariant-gated
-   tensor messages (GotenNet-style), applied to pockets for the first time, with the equivariant-vs-invariant ablation
-   at equal depth and width that the pocket literature lacks.
+2. **The controlled isolation of equivariance and of degree 2 for binding-site detection.** Degree-0/1/2 Cartesian
+   channels with invariant-gated tensor messages, plus an e3nn backbone to l=3. Applying l=2 tensor attention to
+   pockets is prior art (GDEGAN 2026); what no paper provides is the ablation: lmax, equivariant versus invariant,
+   chiral versus achiral, at equal depth, width and features, on one protocol. The nearest adjacent measurement
+   (EquiPNAS on protein-nucleic acid) found the equivariant gain negligible, so a null result here is a real finding.
 3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
 4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
    with the property head.
@@ -29,8 +31,18 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 | C3 | degree-2 tensor channels beat degree ≤ 1 and the invariant model | ablation grid, 3 seeds, equal depth/width | full − no_tensors CI includes 0 |
 | C4 | probes on cavity points beat no probes (and a sphere-probe variant) | ablation | CI includes 0 |
 | C5 | property classes and the hotspot field beat geometry-only and tabular baselines on held-out clusters | per-class AUROC/AP, ECE, enrichment of ligand atoms in top-k % points, permutation control | no gain |
+| C8 | interaction-validated hotspot labels train a better field than proximity labels | the same network trained on `y_hot` and on `y_hot_proximity`, both scored against the validated target | no difference |
 | C6 | peptide-specific features (groove shape + backbone exposure) improve peptide-site ranking | peptide benchmark, feature-group ablation | CI of the gain includes 0 |
 | C7 | the model generalises across benchmarks | COACH420, HOLO4K, LIGYSIS, CryptoBench, held-out families, one protocol, train-similar structures separated | macro-average below the re-run baselines |
+
+## Protocol requirements adopted from the 2026-10-04 survey
+The survey (`docs/LITERATURE_SURVEY.md`) documents ten flaws in how this field reports results. Our tables must
+therefore carry, without exception: top-N **and** top-(N+2); DCC at **4, 10 and 12 Å** as well as DCA at 4 Å; a
+**redundancy statistic** and the non-redundant variant; the **ligand rule** with the resulting system and ligand
+counts; the explicit **chain / biological-unit treatment** for HOLO4K; the homology threshold against every test set
+**and** the measured train/test cluster overlap; the failure rate; and the **candidate recall ceiling**. Every
+baseline is re-run in house; no published row is copied into a table of ours. Where a competing method reports only
+top-N, or only DCC at 4 Å, that is stated next to its number.
 
 ## Data and splits
 `docs/DATA_CARD.md`. Training: RCSB (CC0), 30 %-identity clusters, 5 cluster folds, 12 held-out families excluded by

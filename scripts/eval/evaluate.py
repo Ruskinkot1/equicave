@@ -9,6 +9,15 @@ MRR and the candidate ceiling. Predictions are non-redundant (no two centres wit
 Similarity filter: structures of the set whose 30 % cluster appears in the training manifest are reported separately
 ("train-similar"), so the headline row of an external benchmark is the one with those removed.
 
+Thresholds. Success is reported at DCA <= 4 A (centre to the nearest ligand heavy atom) and at DCC <= 4 A, 10 A and
+12 A (centre to the ligand centroid). The LIGYSIS comparison argues 4 A is too strict for DCC, because a correct
+prediction on a large or elongated ligand can sit more than 4 A from its centroid, and recommends 10-12 A; since the
+reported advantage of equivariant detectors is concentrated in DCC, the threshold is not a detail.
+
+Redundancy. Predictions are non-redundant by construction (no two centres within 6 A), and the table also reports how
+many of the predictions that hit a site hit one that a better-ranked prediction already found, which the LIGYSIS
+comparison showed dominates the apparent ranking of pocket methods.
+
 Ligand rule. COACH420 and HOLO4K are published in two forms: the full list, where every HETATM group that passes the
 solvent/additive filter counts as a site, and the `mlig` ("relevant ligand") list used by P2Rank and DeepPocket, where
 each entry names the ligands that define its sites. `--ligand-rule mlig` (the default when an `_mlig` list exists)
@@ -118,7 +127,9 @@ def one(task):
         ligs = [l for l in ligs if np.linalg.norm(st["xyz"][:, None] - l["xyz"][None], axis=2).min() <= 6.0] if len(st["xyz"]) else []
     if len(st["xyz"]) < 50 or not ligs:
         return dict(pdb=pdb, status="no_ligand" if len(st["xyz"]) >= 50 else "no_protein"), []
-    copies = [l["xyz"] for l in ligs]; L = np.vstack(copies); ns = len(LB.group_sites(ligs))
+    sites = LB.group_sites(ligs)
+    copies = [l["xyz"] for l in ligs]; L = np.vstack(copies); ns = len(sites)
+    site_atoms = [np.vstack([ligs[i]["xyz"] for i in s]) for s in sites]
     ranker = pf.load_ranker(args["ranker"]) if args["ranker"] else None
     net_model = net_cfg = None
     if args["net"]:
@@ -129,8 +140,13 @@ def one(task):
     out = []
     for p in preds:
         d = pk.dca(p["center"], L)
-        out.append(dict(pdb=pdb, chain=chains, n_sites=ns, dca=d, dcc=min(pk.dcc(p["center"], c) for c in copies), label=int(d <= 4.0),
-                        label_dcc=int(min(pk.dcc(p["center"], c) for c in copies) <= 4.0), **{k: v for k, v in p.items() if k != "center"}))
+        dcc_per_site = [pk.dcc(p["center"], a) for a in site_atoms]
+        dca_per_site = [pk.dca(p["center"], a) for a in site_atoms]
+        j = int(np.argmin(dca_per_site))                       # the site this prediction is closest to
+        out.append(dict(pdb=pdb, chain=chains, n_sites=ns, dca=d, dcc=min(dcc_per_site), site_idx=j,
+                        label=int(d <= 4.0), label_dcc=int(min(dcc_per_site) <= 4.0),
+                        label_dcc10=int(min(dcc_per_site) <= 10.0), label_dcc12=int(min(dcc_per_site) <= 12.0),
+                        **{k: v for k, v in p.items() if k != "center"}))
     return dict(pdb=pdb, status="ok", n_sites=ns, n_cands=len(preds)), out
 
 
@@ -168,15 +184,21 @@ def main():
             continue
         results[subset] = {}
         per_ref = None
+        crits = dict(DCA="label", DCC4="label_dcc", DCC10="label_dcc10", DCC12="label_dcc12")
         for m in methods:
-            for crit in ("label", "label_dcc"):
+            for name, crit in crits.items():
+                if crit not in df:
+                    continue
                 per = M.per_structure(df, m, label_col=crit)
                 st = M.summarize(per)
-                if m == "native order" and crit == "label":
+                if m == "native order" and name == "DCA":
                     per_ref = per
-                if per_ref is not None and crit == "label":
+                if per_ref is not None and name == "DCA":
                     st["paired_vs_native_order_top1"] = M.paired_boot(per.set_index("pdb").loc[per_ref["pdb"], "top1"].to_numpy(float), per_ref["top1"].to_numpy(float), per_ref["cluster30"].to_numpy())
-                results[subset][f"{m} ({'DCA' if crit == 'label' else 'DCC'})"] = st
+                if "site_idx" in df:
+                    st["redundancy_all"] = M.redundancy(df, m, label_col=crit)
+                    st["redundancy_topN2"] = M.redundancy(df, m, label_col=crit, top=None)
+                results[subset][f"{m} ({name})"] = st
     for tool in filter(None, a.external.split(",")):     # external tables produced by scripts/baselines/run_external.py --manifest <set list>
         f = REPO / "data/processed" / f"candidates_{tool}_{a.set}.csv"
         if f.exists():
@@ -190,10 +212,14 @@ def main():
              f"Success is DCA (or DCC) <= 4 A; N is the structure's own number of ligand sites; predictions are "
              f"non-redundant (6 A). The headline row is **not train-similar**: structures sharing a 30 %-identity "
              f"cluster with the training manifest are listed separately.", "",
-             "| subset | method | top-1 | top-3 | top-N | top-(N+2) | MRR | n | ceiling |", "|---|---|---|---|---|---|---|---|---|"]
+             "| subset | method | top-1 | top-3 | top-N | top-(N+2) | MRR | n | ceiling | redundant hits |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for subset, d in results.items():
         for m, st in d.items():
-            lines.append(f"| {subset} | {m} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | {M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} |")
+            red = st.get("redundancy_all", {})
+            rtxt = f"{red.get('fraction', float('nan')):.3f}" if red else "—"
+            lines.append(f"| {subset} | {m} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | "
+                         f"{M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} | {rtxt} |")
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"eval_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
     (out / f"eval_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, ligand_rule=a.ligand_rule, n=len(rows),

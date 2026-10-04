@@ -32,33 +32,45 @@ results, the ablation grid and the external-benchmark table: NOT RUN (the networ
 Three questions a designer asks of a structure: where does something bind, what kind of pocket is it, and where
 exactly inside it would each chemical group sit. Methods answer them separately. Geometric detectors (LIGSITE,
 fpocket) answer the first cheaply and with no training. Learned surface models (P2Rank, DeepSurf) rank better.
-Graph and equivariant models (GrASP, EquiPocket, VN-EGNN) improve segmentation. Independent comparison finds hybrid
-pipelines ahead of end-to-end detectors.
+Graph and equivariant models (GrASP, EquiPocket, VN-EGNN, GDEGAN) improve segmentation. The one independent,
+biological-unit-aware comparison [LIGYSIS, J. Cheminform. 2024] places the hybrid fpocket+PRANK first at 60.4 %
+top-(N+2) recall and the equivariant VN-EGNN twelfth of thirteen, with 67 % of its predictions pointing at a site it
+had already found; and inside VN-EGNN's own table P2Rank, a 2018 random forest, wins HOLO4K and PDBbind on DCA. The
+reported advantage of equivariant detectors is concentrated in DCC at a 4 Å threshold that the same comparison argues
+is too strict.
 
 Four gaps motivate this work.
 
 1. **Dependence on external finders.** Learned re-rankers and CNN rescorers take their candidates from fpocket or
    P2Rank, which fixes their ceiling and adds a Java runtime to every deployment. Whether a self-contained generator
    can match that ceiling has not, to our knowledge, been measured.
-2. **Degree-2 features are untested here.** Tensor (l ≥ 2) channels are routine in molecular property prediction.
-   We find no application to binding-site detection, and no ablation isolating equivariance at equal depth and width
-   for this task.
+2. **Degree-2 features are applied but never isolated.** Tensor (l ≥ 2) channels are routine in molecular property
+   prediction, and GDEGAN [arXiv:2603.19817, 2026] has since applied GotenNet with l = 2 and ESM-2 to binding-site
+   prediction. What is missing is evidence that the degree is what helps: GDEGAN reports no l_max ablation, and no
+   equivariant-versus-invariant comparison at equal depth, width and features exists for this task. The nearest
+   adjacent measurement, EquiPNAS on protein–nucleic-acid binding, found the equivariant gain negligible.
 3. **Probes on a sphere.** VN-EGNN's virtual nodes start on a sphere around the protein and must learn to migrate
    into cavities. Cavities can be computed first.
-4. **Hotspot labels are proximity labels.** Fields of ligand-atom type (SILCS, FTMap, Fragment Hotspot Maps,
-   AutoSite) are physics- or sampling-based; learned fields use occupancy. A ligand atom near a point is not evidence
-   that an atom of that class belongs there: the atom has to be making the interaction.
+4. **Hotspot labels are mostly proximity labels.** Fields of ligand-atom type (SILCS, FTMap, Fragment Hotspot Maps,
+   AutoSite) are physics- or sampling-based; learned pocket fields use occupancy within 4 Å. The exception is
+   PharmacoNet [Chem. Sci. 2025], which labels seven pharmacophore types from interactions PLIP actually detects, but
+   with a 3D convolutional network rather than an equivariant one. A ligand atom near a point is not evidence that an
+   atom of that class belongs there: the atom has to be making the interaction.
 
 Peptide binders sit outside all of this: their sites are shallow elongated grooves, evaluated, when at all, with
 small-molecule conventions.
 
 **Contributions.** (i) A geometry-only candidate generator whose ceiling exceeds both external finders on the same
-structures. (ii) Geometric tensor attention for site detection, with probes in real cavities, a surface point cloud,
-amino-acid chemistry as explicit scalars and side-chain direction vectors, probe recycling, and an equivariant versus
-invariant ablation at equal capacity. (iii) Interaction-validated hotspot labels and their geometric counterpart as
-ranker features. (iv) A homology-controlled peptide-site benchmark with a groove tier, and the finding that detection
-is not its bottleneck. (v) One evaluation protocol applied to every benchmark, with train-similar structures reported
-separately and the ligand rule stated.
+structures. (ii) The controlled isolation of equivariance and of tensor degree for site detection — l_max, equivariant
+versus invariant, chiral versus achiral, at equal depth, width and features — together with an architecture that
+places probes in real cavities (a placement we did not find in the protein literature; the mechanism exists in
+DeepDFT for electron density), adds a surface point cloud, gives amino-acid chemistry as explicit scalars and
+side-chain direction vectors, and recycles probe positions. (iii) Interaction-validated hotspot labels in a learned
+equivariant field, with their hand-computed geometric counterpart as ranker features. (iv) A homology-controlled
+peptide-site benchmark with a groove tier and a DCA/DCC protocol for peptide sites, where the field currently has
+none, plus the finding that detection is not the bottleneck there. (v) One evaluation protocol applied to every
+benchmark: top-N and top-(N+2), DCC at 4, 10 and 12 Å, a redundancy statistic, the ligand rule and its counts,
+train-similar structures separated, and every baseline re-run in house.
 
 # 2. Methods
 
