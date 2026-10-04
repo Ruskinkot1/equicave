@@ -78,6 +78,28 @@ one non-polymer ligand of 150-900 Da that is not a solvent, buffer, ion, sugar o
 - **Peptide sites**: ligands are polymer chains of 3–30 observed residues lying within 5 Å of a chain of ≥ 50 residues;
   the peptide chains are removed from the receptor input, so the model never sees what it must find.
 
+## Dataset cleaning, and how much leaks (measured 2026-10-04)
+
+`scripts/data/clean_manifest.py` applies four filters and reports what each one costs. Run on the 1499-entry
+manifest it keeps **432 entries in 383 clusters**:
+
+| filter | entries removed |
+|---|---|
+| shares a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family | **986** |
+| ligand quality: fewer than 15 receptor contacts within 4.5 Å, mean occupancy below 0.5, mean b-factor above twice the receptor's, or mean 26-ray closure below 10 | 44 |
+| no legacy PDB file at RCSB | 36 |
+| more than two entries for the same (cluster, ligand) pair | 1 |
+
+**Two thirds of a PDB-wide drug-bound training set leaks into the standard pocket benchmarks** at the 30 % identity
+level, because those benchmarks were themselves drawn from the same part of the PDB: COACH420, HOLO4K, LIGYSIS and
+CryptoBench together occupy 5295 clusters. Any method trained on PDB-wide data and evaluated on these sets without
+this filter is reporting a partly memorised number — which is also why our own COACH420 evaluation reports the
+`not train-similar` subset as the headline row, and why the cleaned manifest is small enough that a larger raw
+manifest is a requirement rather than an optimisation.
+
+The ligand-quality thresholds encode a simple rule: a molecule with half occupancy, twice the protein's b-factor and
+a handful of contacts is crystallisation noise, and a model trained to find it learns noise.
+
 ## Leakage controls
 - Splits are by RCSB 30 %-identity cluster; a cluster never spans folds; at most 3 entries per cluster (2 for the peptide set).
 - The 12 held-out families are excluded by cluster **and** UniProt accession from every training manifest.

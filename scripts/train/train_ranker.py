@@ -106,9 +106,17 @@ def main():
     ap.add_argument("--features-extra", default="", help="comma-separated: net (network scores), esm (language-model features)")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
+    ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
     df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
+    if a.restrict_to:
+        import csv as _csv
+        keep = {r["pdb"] for r in _csv.DictReader(open(a.restrict_to))}
+        before, before_cl = df["pdb"].nunique(), df["cluster30"].nunique()
+        df = df[df["pdb"].isin(keep)].reset_index(drop=True)
+        print(f"restricted to {pathlib.Path(a.restrict_to).name}: {df['pdb'].nunique()}/{before} structures, "
+              f"{df['cluster30'].nunique()}/{before_cl} clusters")
     geo = json.loads((ds / f"candidates_{a.tag}.geometry.json").read_text())
     feats = list(pf.FEATURES) + ([f for f in pf.PEPTIDE if f in df] if a.tag == "peptide" else [])
     extras = [x for x in a.features_extra.split(",") if x]
@@ -126,6 +134,7 @@ def main():
         missing = int(df[esm_cols[0]].eq(0.0).sum()) if esm_cols else 0
         print(f"ESM features: {len(esm_cols)} columns joined to {before} candidates ({missing} without an embedding)")
         feats += esm_cols
+        pf.GROUPS = dict(pf.GROUPS, esm=esm_cols)       # so --ablate measures what the language model is worth
     feats = [f for f in dict.fromkeys(feats) if f in df]
     df = add_relevance(df, graded=not a.no_graded)
     base_feats = list(feats)

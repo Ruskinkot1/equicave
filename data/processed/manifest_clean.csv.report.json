@@ -1,0 +1,28 @@
+{
+ "manifest": "data/processed/manifest.csv",
+ "kept": 432,
+ "input": 1499,
+ "dropped": {
+  "leakage_eval_or_heldout": 986,
+  "no_pdb_file": 36,
+  "ligand_quality": 44,
+  "cluster_ligand_cap": 1
+ },
+ "clusters": 383,
+ "folds": {
+  "0": 95,
+  "1": 95,
+  "2": 73,
+  "3": 81,
+  "4": 88
+ },
+ "thresholds": {
+  "min_contacts": 15,
+  "min_occupancy": 0.5,
+  "max_bfactor_ratio": 2.0,
+  "min_buried": 10.0,
+  "per_cluster_ligand": 2
+ },
+ "eval_clusters": 5295,
+ "quality_checked": 477
+}
