@@ -31,7 +31,9 @@ one non-polymer ligand of 150-900 Da that is not a solvent, buffer, ion, sugar o
 | `manifest.csv` | 1499 PDB entries: resolution, 30 %-identity cluster, fold (0-4), UniProt, chains, ligands as `[comp, chains, type, weight, charge]` | RCSB PDB search + GraphQL (CC0) |
 | `heldout_targets.json` | 12 held-out benchmark families with their 30 % clusters (11) and UniProt accessions (12) | `scripts/data/build_manifest.py` |
 | `manifest_peptide.csv` | 973 protein-peptide complexes in 685 receptor clusters, folds, peptide chains, peptide lengths and sequences | RCSB (CC0); clusters disjoint from `manifest.csv` |
-| `candidates_native.csv` (+ `.geometry.json`) | 40 986 native candidates of 1367 structures with 32 features, DCA, DCC and label | `scripts/train/build_native.py` |
+| `candidates_native3.csv.gz` (+ `.geometry.json`) | 40 986 native candidates of 1367 structures with 118 features, DCA, DCC and label; `candidates_native.csv.gz` is the earlier table whose interaction-potential group was saturated | `scripts/train/build_native.py` |
+| `point_features_native.csv.gz` | the 18 out-of-fold aggregates of the per-point ligandability score, one row per candidate, joinable on (pdb, center) | `scripts/train/train_point_model.py` |
+| `points_native.csv.gz` | **not committed**: one row per cavity grid point (about 2.3 M rows) with its 32 features and occupancy label; regenerable by `make points` in about half an hour | `scripts/train/build_points.py` |
 | `candidates_peptide.csv` | merged cavity + groove candidates of the peptide set with the peptide feature group | `scripts/train/build_peptide.py` |
 | `structures_*.csv` | per-structure summary: status, n_sites, candidates, best DCA, runtime | the same scripts |
 | `labels_sites.csv`, `labels_summary.json` | one row per ligand site with its property vector; class prevalences | `python -m training pockets-labels` |
