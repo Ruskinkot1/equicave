@@ -49,6 +49,52 @@ STAGES="net net-oof hybrid ablations" bash scripts/train/train_all.sh  # GPU par
 | 9 | `make eval` | held-out, COACH420, HOLO4K under one protocol | CPU | hours |
 | – | `FPOCKET=... PRANK=... make baselines` | fpocket and P2Rank on the same structures | CPU + Java | hours |
 
+## 2b. Training at maximum scale (what to run if you have a day and many cores)
+
+The measured results in the README come from 1367 structures and 1017 sequence clusters. Competing methods train on
+roughly ten times that, and for a gradient-boosted ranker more clusters is the most reliable gain available without a
+GPU. Three manifests ship with the repository:
+
+| manifest | structures | 30 % clusters | build cost |
+|---|---|---|---|
+| `manifest.csv` | 1499 | 1017 | 20 min of downloads, 1.5 h of candidates on 4 cores |
+| `manifest_big.csv` | 3965 | 2824 | 1 h of downloads, 4 h of candidates on 4 cores |
+| `manifest_max.csv` | every matching RCSB entry | > 10 000 expected | hours of downloads, 10-20 h of candidates on 4 cores |
+
+```bash
+# the whole large-scale pipeline, one command
+JOBS=16 make all-max
+
+# or step by step
+make data-max                                   # rebuild the manifest yourself (30-60 min of RCSB metadata queries)
+JOBS=16 make candidates-max                     # streaming: downloads each structure, featurises, deletes it
+TAG=max make esm                                # language-model features per candidate (no GPU)
+make ranker-max                                 # the ranker on everything, with the ESM features and ablations
+```
+
+Three things to know before starting it.
+
+1. **Disk.** A structure is 0.61 MB on average, so keeping 60 000 of them is about 37 GB. `--stream` (used by
+   `candidates-max`) downloads each one, featurises it and deletes it, so the footprint stays at a few files. Do not
+   drop `--stream` unless you have the space.
+2. **It is restartable.** Rows are flushed to `data/processed/max_chunks/` every 50 structures and structures already
+   present are skipped, so an interrupted run resumes where it stopped. Keep the chunk directory until the final
+   table exists.
+3. **Compare like with like.** A ranker trained on the maximum table must be evaluated with the same protocol as the
+   small one, and the external benchmarks must be re-checked for cluster overlap with the *new* manifest
+   (`scripts/eval/evaluate.py` does this automatically and reports train-similar structures separately). A gain that
+   comes from new leakage is not a gain.
+
+To hand the dataset to someone else without shipping tens of gigabytes:
+
+```bash
+python scripts/data/export_dataset.py --manifest manifest_max.csv --tag max --out dist/equicave_max.tar.gz
+# on the other machine
+python scripts/data/export_dataset.py --import dist/equicave_max.tar.gz && JOBS=16 make candidates-max
+```
+The archive holds the manifest, the geometry constants, the commit and checksums — everything that determines the
+data. The import refuses to pretend it matches if the geometry constants of that checkout differ.
+
 ## 3. Training the network on a GPU
 
 ```bash
