@@ -15,6 +15,9 @@ papers are never compared directly to ours: every baseline is re-run on our spli
    pockets is prior art (GDEGAN 2026); what no paper provides is the ablation: lmax, equivariant versus invariant,
    chiral versus achiral, at equal depth, width and features, on one protocol. The nearest adjacent measurement
    (EquiPNAS on protein-nucleic acid) found the equivariant gain negligible, so a null result here is a real finding.
+   The invariant arm scalarises the same geometry in a local frame, so a gain cannot come from the baseline being
+   blind to coordinates; the blinded arm is reported separately to quantify how much of a published "equivariance
+   gain" that confound can account for.
 3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
 4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
    with the property head.

@@ -156,7 +156,7 @@ the achiral model must be reflection-invariant, the chiral one must not be).
 |---|---|---|
 | residue segmentation | per residue, 1 if a heavy atom is within 4 Å of a ligand atom | Dice + BCE (pos_weight 3) |
 | probe occupancy | per cavity point, 1 if a ligand atom is within 2 Å | Dice + BCE (pos_weight 3) |
-| site centre | `center = p_probe + offset`, where `offset = Σ_f w_f V_f` is read out **from the vector channels** (an equivariant vector; the invariant ablation uses a plain MLP and is honestly reported as not equivariant there) | set loss: every true site is approached by its nearest probe within 8 Å, `mean_s min_{p near s} ‖center_p − c_s‖` |
+| site centre | `center = p_probe + offset`, where `offset = Σ_f w_f V_f` is read out **from the vector channels** (an equivariant vector; both invariant arms read the centre from a plain MLP instead, which is stated in the paper because that head is then not equivariant) | set loss: every true site is approached by its nearest probe within 8 Å, `mean_s min_{p near s} ‖center_p − c_s‖` |
 | confidence | per probe | BCE against `1[‖center_p − nearest site‖ < 4 Å]` (detached target) |
 | pocket properties | multi-label over 14 classes, from probes pooled with the site's soft membership mask (scalars and `‖V‖` concatenated) | BCE |
 | hotspot field | 7 ligand-atom classes per probe (hydrophobic C, aromatic, HBD, HBA, cation, anion, halogen), **interaction-validated**: a class is positive only where the witnessing ligand atom really makes that contact with the receptor | focal BCE (γ = 2, α = 0.75) |
@@ -185,9 +185,22 @@ of the manifest. `mode=oof` trains one model per fold and writes out-of-fold `ne
 `net_hot_mean` for every native candidate, so the ranker never sees a network that saw its structure.
 
 ### 2.6 Ablations (`training/configs/ablations.yaml`)
-`full`, `no_probes`, `no_surface`, `no_esm`, `no_tensors` (degree ≤ 1), `no_vectors` (scalars only),
-`invariant` (distances-only GNN at equal depth and width), `achiral`. Same optimiser, folds and ≥ 3 seeds; the table
-is built by `scripts/train/collect_ablations.py` with paired differences against `full`.
+`full`, `no_probes`, `no_surface`, `no_esm`, `no_tensors` (degree ≤ 1), `no_vectors`, `achiral`, `no_recycling`,
+`no_sequence_edges`, `no_masked_residue`, `no_residue_chemistry`, `nearest_probe_loss`, `e3nn_l2`, `e3nn_l3`, and the
+two invariance arms below. Same optimiser, folds and ≥ 3 seeds; the table is built by
+`scripts/train/collect_ablations.py` with paired differences against `full`.
+
+**The invariant arm is fair by construction**, which took a correction. An ablation that turns equivariance off must
+change the mechanism and nothing else. The first version of the switch also discarded the initial vectors, removing
+the backbone directions, the side-chain chemistry vectors and the surface normals: it measured "coordinates versus no
+coordinates", the confound this literature is criticised for (EquiPocket's and VN-EGNN's GAT/GCN baselines receive no
+coordinates at all, which is why their 23-point "equivariance gain" means something else). `invariant_frames` now
+scalarises each node's own vectors in a local frame built from two of them by Gram-Schmidt, so the invariant model
+receives the same geometry at the same depth and width, as invariant numbers instead of steerable channels;
+degenerate frames fall back to the axis-aligned one, a documented approximation for nodes whose own geometry is
+missing. `tests/test_model.py` asserts both halves: the arm is rotation-invariant, **and** its output changes when the
+initial vectors are zeroed, so it cannot silently become blind again. `invariant_blind` keeps the old behaviour as a
+separate arm, so the difference between "invariant" and "blind" is itself a reported number.
 
 ---
 
