@@ -204,6 +204,7 @@ class EquiCaveNet(nn.Module):
         self.head_hot = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, n_hot))
         self.head_prop = nn.Sequential(nn.Linear(2 * dim, dim), nn.SiLU(), nn.Linear(dim, n_props))
         self.head_seq = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, n_res_types))   # masked-residue task
+        self.head_pot = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 7))              # masked-potential task
         self.head_size = nn.Sequential(nn.Linear(2 * dim, dim), nn.SiLU(), nn.Linear(dim, 1))         # ligand heavy atoms of the site
         self.off_vec = nn.Linear(dim, 1, bias=False)                       # equivariant read-out from vector channels
         self.off_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant model: plain regression (not equivariant)
@@ -271,7 +272,7 @@ class EquiCaveNet(nn.Module):
             x, V, T = self.trunk(b, pos, ei, et, es)
             o = dict(res_logit=self.head_res(x[res]).squeeze(-1), occ_logit=self.head_occ(x[probe]).squeeze(-1),
                      conf_logit=self.head_conf(x[probe]).squeeze(-1), hot_logit=self.head_hot(x[probe]),
-                     seq_logit=self.head_seq(x[res]), x=x, probe_pos=pos[probe])
+                     seq_logit=self.head_seq(x[res]), pot_logit=self.head_pot(x[probe]), x=x, probe_pos=pos[probe])
             if self.use_vectors:
                 o["offset"] = torch.einsum("nfc,f->nc", V[probe], self.off_vec.weight[0])
             else:
@@ -367,6 +368,14 @@ def masked_residue_loss(seq_logit: torch.Tensor, true_types: torch.Tensor, mask:
     if mask.sum() == 0:
         return seq_logit.sum() * 0
     return Fn.cross_entropy(seq_logit[mask], true_types[mask])
+
+
+def potential_loss(pot_logit: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Recover the hidden interaction potential of masked probes: dense, free supervision on exactly the
+    chemistry the ranker's most valuable feature group is built from."""
+    if mask is None or mask.sum() == 0:
+        return pot_logit.sum() * 0
+    return Fn.binary_cross_entropy_with_logits(pot_logit[mask], target[mask])
 
 
 def size_loss(size_pred: torch.Tensor, n_atoms: torch.Tensor) -> torch.Tensor:

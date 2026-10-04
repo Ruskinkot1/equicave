@@ -41,9 +41,11 @@ SHELL = [f"{t}_{int(r)}" for r in SHELLS for t in ("donor", "acceptor", "cation"
          "polar_apolar_ratio", "donor_acceptor_per_volume"]
 # interaction potential: for each cavity point, which interaction a ligand atom placed there could actually make
 POT_CLASSES = ("hbd", "hba", "hydrophobic", "aromatic", "cation", "anion", "halogen")
-POTENTIAL = [f"pot_f_{c}" for c in POT_CLASSES] + [f"pot_n_{c}" for c in POT_CLASSES] + \
-            ["pot_classes_mean", "pot_f_multi2", "pot_f_multi3", "pot_f_polar_apolar", "pot_f_hbd_hba",
-             "pot_best_point_classes", "pot_volume_multi3"]
+POTENTIAL = ([f"pot_f_{c}" for c in POT_CLASSES]            # fraction of points with a partner at the strict distance
+             + [f"pot_d_{c}" for c in POT_CLASSES]           # mean distance to the nearest partner of that type
+             + [f"pot_c_{c}" for c in POT_CLASSES]           # mean number of partners within 6 A
+             + ["pot_classes_mean", "pot_f_multi2", "pot_f_multi3", "pot_f_polar_apolar", "pot_f_hbd_hba",
+                "pot_best_point_classes", "pot_volume_multi3", "pot_d_min_overall", "pot_c_total"])
 CONTEXT = ["prot_n_res", "n_cands"]
 FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + POTENTIAL + CONTEXT
 # Network features, all rotation-invariant scalars. The three originals are kept first for compatibility; the rest
@@ -56,6 +58,39 @@ PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatnes
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
 GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, potential=POTENTIAL,
               context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE)
+
+
+POT_SPEC = (("hbd", "acceptor"), ("hba", "donor"), ("hydrophobic", "hydrophobic"), ("aromatic", "aromatic"),
+            ("cation", "anion"), ("anion", "cation"), ("halogen", "acceptor"))
+
+
+def point_potential(points: np.ndarray, trees: dict, count_radius: float = 6.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per point: how many partners of each interaction type are near, how near the nearest is, and a strict flag.
+
+    Returns (count [P, 7], distance to the nearest [P, 7], strict availability [P, 7]).
+
+    A plain "is a partner within the cutoff" flag turned out to be **useless**: measured on a real structure, every
+    cavity probe had all seven interaction types available, because a 4.5-5.5 A cutoff inside a protein is always
+    satisfied and the flag is constant. The information is in *how many* partners and *how close* the nearest one is,
+    so those are what the model gets. The strict flag uses a tight threshold (hydrogen bonds 3.2 A, salt bridges
+    3.5 A, halogen 3.5 A, stacking 4.5 A, hydrophobic contact 4.0 A) where it does vary.
+    """
+    from . import labels as LB
+    strict = dict(hbd=3.2, hba=3.2, hydrophobic=4.0, aromatic=4.5, cation=3.5, anion=3.5, halogen=3.5)
+    pts = np.atleast_2d(np.asarray(points, float))
+    n, k = len(pts), len(POT_SPEC)
+    count = np.zeros((n, k), np.float32)
+    dist = np.full((n, k), count_radius * 2, np.float32)
+    avail = np.zeros((n, k), np.float32)
+    for j, (name, partner) in enumerate(POT_SPEC):
+        tr = trees.get(partner)
+        if tr is None or n == 0:
+            continue
+        q = tr.query(pts)[0]
+        dist[:, j] = np.minimum(q, count_radius * 2)
+        avail[:, j] = (q <= strict[name]).astype(np.float32)
+        count[:, j] = [len(x) for x in tr.query_ball_point(pts, count_radius)]
+    return count, dist, avail
 
 
 def interaction_potential(points: np.ndarray, trees: dict, max_points: int = 200, seed: int = 0) -> dict:
@@ -74,16 +109,14 @@ def interaction_potential(points: np.ndarray, trees: dict, max_points: int = 200
     n_total = len(pts)
     if n_total > max_points:
         pts = pts[np.random.default_rng(seed).permutation(n_total)[:max_points]]
-    spec = [("hbd", "acceptor", LB.HBOND_D), ("hba", "donor", LB.HBOND_D), ("hydrophobic", "hydrophobic", LB.HYDROPHOBIC_D),
-            ("aromatic", "aromatic", LB.AROMATIC_D), ("cation", "anion", LB.SALT_D), ("anion", "cation", LB.SALT_D),
-            ("halogen", "acceptor", LB.HALOGEN_D)]
-    avail = {}
-    for name, partner, d in spec:
-        tr = trees.get(partner)
-        avail[name] = (tr.query(pts, distance_upper_bound=d)[0] <= d) if tr is not None else np.zeros(len(pts), bool)
-    n_cls = np.stack([avail[n] for n, _, _ in spec], 1).sum(1)
-    out = {f"pot_f_{n}": float(avail[n].mean()) for n, _, _ in spec}
-    out.update({f"pot_n_{n}": float(avail[n].sum()) for n, _, _ in spec})
+    C, D, A = point_potential(pts, trees)
+    avail = {name: A[:, j].astype(bool) for j, (name, _) in enumerate(POT_SPEC)}
+    n_cls = A.sum(1)
+    out = {f"pot_f_{n}": float(A[:, j].mean()) for j, (n, _) in enumerate(POT_SPEC)}
+    out.update({f"pot_d_{n}": float(D[:, j].mean()) for j, (n, _) in enumerate(POT_SPEC)})
+    out.update({f"pot_c_{n}": float(C[:, j].mean()) for j, (n, _) in enumerate(POT_SPEC)})
+    out["pot_d_min_overall"] = float(D.min(1).mean())
+    out["pot_c_total"] = float(C.sum(1).mean())
     out["pot_classes_mean"] = float(n_cls.mean())
     out["pot_f_multi2"] = float((n_cls >= 2).mean())
     out["pot_f_multi3"] = float((n_cls >= 3).mean())

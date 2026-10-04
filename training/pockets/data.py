@@ -7,7 +7,13 @@ Node types and inputs
         The last two say which way the residue's chemistry faces, which is what distinguishes an Asp whose
         carboxylate lines the cavity from one pointing at the solvent.
   probe free cavity lattice points (buriedness >= FILL_MIN_BURIED, deep points first), <= n_probe
-        scalars: buriedness/26, distance to protein/8, deep flag, counts of atoms within 4/6/8 A (scaled)
+        scalars: buriedness/26, distance to protein/8, deep flag, counts of atoms within 4/6/8 A (scaled),
+        and the interaction potential of the point itself (21 numbers): a strict availability flag, the distance to
+        the nearest partner and the number of partners within 6 A, for each of the seven interaction types. A plain
+        "within the cutoff" flag is useless here, because inside a protein every probe satisfies it; the distances
+        and counts are where the signal is. Without them the trunk has to infer "this probe faces an Asp
+        carboxylate" from residue one-hots through several rounds of message passing, when it is one tree query; the
+        same information is what the ranker's chemistry group is made of, and that group is worth the most to it.
         initial vectors: unit vector to nearest atom, mean direction to atoms within 6 A, zero
   surf  SAS points (Shrake-Rupley), <= n_surf: one-hot owner element (5) + one-hot owner residue (21) + buriedness/26
         initial vectors: outward normal, owner CA->atom, zero
@@ -23,7 +29,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
-from equicave import ccd, detect, labels as LB, pockets as pk, residues as resprops, structure
+from equicave import ccd, detect, labels as LB, pocket_features as pf, pockets as pk, residues as resprops, structure
 
 RES = list("ACDEFGHIKLMNPQRSTVWY") + ["X"]
 ELEM = ["C", "N", "O", "S", "X"]
@@ -104,7 +110,8 @@ def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple
 
 def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_probe: int = 768, n_surf: int = 512,
               seed: int = 0, entries: dict | None = None, k_scale: float = 1.0, druglike_only: bool = False,
-              require_interaction: bool = True, residue_chemistry: bool = True) -> dict | None:
+              require_interaction: bool = True, residue_chemistry: bool = True,
+              probe_potential: bool = True) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable."""
     rng = np.random.default_rng(seed)
     st = structure.read_pdb(pdb_path)
@@ -143,6 +150,11 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     cnt = np.stack([np.array([len(x) for x in tree.query_ball_point(ppos, r)]) for r in (4.0, 6.0, 8.0)], 1).astype(np.float32)
     feat_probe = np.concatenate([pb[:, None] / 26, pd_[:, None] / 8, (pb >= detect.DETECT_MIN_BURIED)[:, None].astype(np.float32),
                                  cnt / np.array([20, 60, 140], np.float32)], 1)
+    if probe_potential:
+        types_p = LB.protein_atom_types(st)
+        trees_p = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types_p.items()}
+        cnt_p, dmin, avail = pf.point_potential(ppos, trees_p)
+        feat_probe = np.concatenate([feat_probe, avail, dmin / 6.0, np.log1p(cnt_p) / 3.0], 1).astype(np.float32)
     dn, jn = tree.query(ppos)
     v1 = (xyz[jn] - ppos) / np.maximum(dn[:, None], 1e-6)
     v2 = np.zeros_like(ppos)
@@ -179,6 +191,7 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
                vec0=np.concatenate([vec_res, vec_probe, vec_surf]).astype(np.float32), edge_index=ei, edge_type=et,
                edge_scalar=edge_scalars(ei, types, res_index, chain_index),
                res_type=ridx.astype(np.int64), n_res=n_res_nodes, n_probe=len(ppos), n_surf=len(spts), resid=rt["resid"],
+               probe_potential=(avail if probe_potential else np.zeros((len(ppos), 7), np.float32)),
                cand_centers=np.array([c["center"] for c in cands], np.float32).reshape(-1, 3))
     # labels
     if lig_codes is not None:
@@ -214,7 +227,7 @@ def to_torch(d: dict, device="cpu"):
     n_res, n_probe = int(d["n_res"]), int(d["n_probe"])
     keys = ["pos", "node_type", "feat_res", "feat_probe", "feat_surf", "vec0", "edge_index", "edge_type"]
     b = {k: torch.as_tensor(np.asarray(d[k]), device=device) for k in keys}
-    for k in ("edge_scalar", "res_type", "site_n_atoms"):
+    for k in ("edge_scalar", "res_type", "site_n_atoms", "probe_potential"):
         if k in d:
             b[k] = torch.as_tensor(np.asarray(d[k]), device=device)
     b["slices"] = dict(res=torch.arange(n_res, device=device), probe=torch.arange(n_res, n_res + n_probe, device=device),
@@ -226,6 +239,28 @@ def to_torch(d: dict, device="cpu"):
         b["res_type"] = b["res_type"].long()
     b["pdb"] = d.get("pdb", "")
     return b
+
+
+def mask_probe_potential(b: dict, frac: float = 0.2, rng=None):
+    """Hide the potential channels of a random subset of probes and return them as a target.
+
+    Feeding the potential and predicting it would be an identity map; masking makes it supervision. A probe whose own
+    channels are hidden has to infer what it could bind from its neighbourhood, which is the reasoning the site heads
+    need. The hidden rows are zeroed in `feat_probe` (both the availability flags and the distances).
+    """
+    import torch
+    if frac <= 0 or "probe_potential" not in b:
+        return b, torch.zeros(0, dtype=torch.bool, device=b["feat_probe"].device), None
+    n = len(b["feat_probe"])
+    g = torch.Generator(device="cpu")
+    if rng is not None:
+        g.manual_seed(int(rng.integers(0, 2 ** 31)))
+    m = (torch.rand(n, generator=g) < frac).to(b["feat_probe"].device)
+    b = dict(b)
+    f = b["feat_probe"].clone()
+    f[m, -21:] = 0.0
+    b["feat_probe"] = f
+    return b, m, b["probe_potential"]
 
 
 def mask_residues(b: dict, frac: float = 0.15, rng=None):
@@ -267,7 +302,8 @@ def random_rotation(b: dict, rng: np.random.Generator):
 
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
                 n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
-                require_interaction: bool = True, residue_chemistry: bool = True) -> list[str]:
+                require_interaction: bool = True, residue_chemistry: bool = True,
+                probe_potential: bool = True) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent."""
     import csv
     from training.pockets.esm_embed import Embedder, cached
@@ -290,7 +326,7 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
             e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
             d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
                           druglike_only=druglike_only, require_interaction=require_interaction,
-                          residue_chemistry=residue_chemistry)
+                          residue_chemistry=residue_chemistry, probe_potential=probe_potential)
             if d is not None and "y_res" in d:
                 d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                 save(d, f); done.append(r["pdb"])

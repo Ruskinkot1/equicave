@@ -9,6 +9,7 @@ data:
   limit: 0
   require_interaction: true    # hotspot labels only where the ligand atom really makes that interaction
   druglike_only: false         # true: train the field on drug-like ligands only
+  probe_potential: true        # per-probe interaction potential as input channels and as a masked target
 split:
   val_fold: 0                            # 5-fold CV by cluster: run once per fold
 model:
@@ -31,6 +32,8 @@ model:
 loss:
   hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
   mask_frac: 0.15            # self-supervised masked-residue task
+  pot_mask_frac: 0.2         # fraction of probes whose potential channels are hidden and predicted
+  w_potential: 0.3
   recycle_weight: 0.5        # weight of the intermediate recycling passes (deep supervision)
   w_seq: 0.3
   w_size: 0.1

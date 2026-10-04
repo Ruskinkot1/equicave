@@ -52,7 +52,7 @@ class EMA:
                 s.mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
 
 
-def losses(out, b, w, res_mask=None):
+def losses(out, b, w, res_mask=None, pot_mask=None, pot_target=None):
     """Weighted multi-task loss. Every pass of a recycled forward is supervised (deep supervision), the last one fully."""
     import torch
     passes = out.get("passes", [out])
@@ -73,6 +73,8 @@ def losses(out, b, w, res_mask=None):
             part["seq"] = M.masked_residue_loss(o["seq_logit"], b["res_type"], res_mask)
         if last and "size_pred" in o and "site_n_atoms" in b:
             part["size"] = M.size_loss(o["size_pred"], b["site_n_atoms"])
+        if last and pot_mask is not None and "pot_logit" in o and pot_target is not None:
+            part["potential"] = M.potential_loss(o["pot_logit"], pot_target, pot_mask)
         total = total + scale * sum(w.get(f"w_{k}", 0.0) * v for k, v in part.items())
         if last:
             L = part
@@ -225,8 +227,9 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
             if cfg["optim"]["rotate"]:
                 b = D.random_rotation(b, rng)
             b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
+            b, pot_mask, pot_target = D.mask_probe_potential(b, cfg["loss"].get("pot_mask_frac", 0.2), rng)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                out = model(b); total, parts = losses(out, b, cfg["loss"], res_mask)
+                out = model(b); total, parts = losses(out, b, cfg["loss"], res_mask, pot_mask, pot_target)
             (total / acc).backward()
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0) + v / len(order)
@@ -274,7 +277,7 @@ def run(a) -> int:
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))
     log(f"config: {json.dumps(cfg)}")
     ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True),
-                       dc.get("residue_chemistry", True))
+                       dc.get("residue_chemistry", True), dc.get("probe_potential", True))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold
