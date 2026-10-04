@@ -29,7 +29,23 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 | fpocket 4.x, same structures | 0.955 | 37.8 | — |
 | P2Rank 2.5.1, same structures | 0.914 | 9.2 | — |
 
-### Ranking, same 1367 structures and labels
+### Ranking on the leakage-free subset (432 structures, 383 clusters, 109 features)
+Structures sharing a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family are
+removed from training *and* from this cross-validation, so nothing here is memorised from a benchmark.
+
+| method | top-1 | top-N | top-(N+2) | MRR |
+|---|---|---|---|---|
+| detector order | 0.516 [0.465, 0.565] | 0.641 | 0.812 | 0.654 |
+| most buried first | 0.352 | 0.525 | 0.766 | 0.549 |
+| **LambdaRank, 109 features + z-scores** | **0.782 [0.740, 0.823]** | **0.835** | **0.925** | 0.848 |
+| **the same, seed ensemble** | **0.792 [0.750, 0.832]** | **0.845 [0.808, 0.880]** | **0.928 [0.903, 0.953]** | 0.853 |
+| the same, isotonically calibrated | 0.787 | 0.847 | 0.928 | 0.852 |
+
+Candidate ceiling 0.988. Calibration: expected calibration error 0.004 after isotonic regression against 0.034 for a
+plain sigmoid of the score, with mean predicted 0.1805 against a base rate of 0.1806. The gain over the detector
+order is +0.275 top-1 [+0.228, +0.329] by paired cluster bootstrap.
+
+### Ranking, same 1367 structures and labels (earlier 32-feature model, retained for comparison)
 | method | top-1 | top-(N+2) |
 |---|---|---|
 | detector order | 0.523 [0.494, 0.552] | 0.800 [0.777, 0.825] |

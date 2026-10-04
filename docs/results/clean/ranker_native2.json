@@ -1,0 +1,522 @@
+{
+ "n_structures": 432,
+ "n_clusters": 383,
+ "n_candidates": 12955,
+ "seeds": 3,
+ "features": [
+  "nat_score",
+  "nat_rank",
+  "nat_rel",
+  "nat_npts",
+  "nat_mean_bur",
+  "nat_max_bur",
+  "nat_cavity_npts",
+  "nat_tier",
+  "cav_volume",
+  "ax1",
+  "ax2",
+  "ax3",
+  "buried_mean",
+  "vol_rank",
+  "centrality",
+  "depth",
+  "bur_std",
+  "bur_p10",
+  "bur_p90",
+  "frac_deep",
+  "frac_mouth",
+  "width_mean",
+  "width_max",
+  "elongation",
+  "flatness",
+  "pts_per_volume",
+  "n_atoms",
+  "f_C",
+  "f_N",
+  "f_O",
+  "f_S",
+  "f_backbone",
+  "n_res",
+  "r_hydrophobic",
+  "r_aromatic",
+  "r_polar",
+  "r_pos",
+  "r_neg",
+  "r_gly",
+  "r_pro",
+  "donor_5",
+  "acceptor_5",
+  "cation_5",
+  "anion_5",
+  "aromatic_5",
+  "hydrophobic_5",
+  "donor_8",
+  "acceptor_8",
+  "cation_8",
+  "anion_8",
+  "aromatic_8",
+  "hydrophobic_8",
+  "donor_12",
+  "acceptor_12",
+  "cation_12",
+  "anion_12",
+  "aromatic_12",
+  "hydrophobic_12",
+  "f_donor_5",
+  "f_acceptor_5",
+  "f_cation_5",
+  "f_anion_5",
+  "f_aromatic_5",
+  "f_hydrophobic_5",
+  "f_donor_8",
+  "f_acceptor_8",
+  "f_cation_8",
+  "f_anion_8",
+  "f_aromatic_8",
+  "f_hydrophobic_8",
+  "f_donor_12",
+  "f_acceptor_12",
+  "f_cation_12",
+  "f_anion_12",
+  "f_aromatic_12",
+  "f_hydrophobic_12",
+  "kd_mean",
+  "kd_sum",
+  "bfac_mean",
+  "bfac_std",
+  "n_res_5",
+  "n_res_12",
+  "hb_balance",
+  "charge_balance",
+  "polar_apolar_ratio",
+  "donor_acceptor_per_volume",
+  "pot_f_hbd",
+  "pot_f_hba",
+  "pot_f_hydrophobic",
+  "pot_f_aromatic",
+  "pot_f_cation",
+  "pot_f_anion",
+  "pot_f_halogen",
+  "pot_n_hbd",
+  "pot_n_hba",
+  "pot_n_hydrophobic",
+  "pot_n_aromatic",
+  "pot_n_cation",
+  "pot_n_anion",
+  "pot_n_halogen",
+  "pot_classes_mean",
+  "pot_f_multi2",
+  "pot_f_multi3",
+  "pot_f_polar_apolar",
+  "pot_f_hbd_hba",
+  "pot_best_point_classes",
+  "pot_volume_multi3",
+  "prot_n_res",
+  "n_cands",
+  "nat_score_z",
+  "nat_rank_z",
+  "nat_rel_z",
+  "nat_npts_z",
+  "nat_mean_bur_z",
+  "nat_max_bur_z",
+  "nat_cavity_npts_z",
+  "nat_tier_z",
+  "cav_volume_z",
+  "ax1_z",
+  "ax2_z",
+  "ax3_z",
+  "buried_mean_z",
+  "vol_rank_z",
+  "centrality_z",
+  "depth_z",
+  "bur_std_z",
+  "bur_p10_z",
+  "bur_p90_z",
+  "frac_deep_z",
+  "frac_mouth_z",
+  "width_mean_z",
+  "width_max_z",
+  "elongation_z",
+  "flatness_z",
+  "pts_per_volume_z",
+  "n_atoms_z",
+  "f_C_z",
+  "f_N_z",
+  "f_O_z",
+  "f_S_z",
+  "f_backbone_z",
+  "n_res_z",
+  "r_hydrophobic_z",
+  "r_aromatic_z",
+  "r_polar_z",
+  "r_pos_z",
+  "r_neg_z",
+  "r_gly_z",
+  "r_pro_z",
+  "donor_5_z",
+  "acceptor_5_z",
+  "cation_5_z",
+  "anion_5_z",
+  "aromatic_5_z",
+  "hydrophobic_5_z",
+  "donor_8_z",
+  "acceptor_8_z",
+  "cation_8_z",
+  "anion_8_z",
+  "aromatic_8_z",
+  "hydrophobic_8_z",
+  "donor_12_z",
+  "acceptor_12_z",
+  "cation_12_z",
+  "anion_12_z",
+  "aromatic_12_z",
+  "hydrophobic_12_z",
+  "f_donor_5_z",
+  "f_acceptor_5_z",
+  "f_cation_5_z",
+  "f_anion_5_z",
+  "f_aromatic_5_z",
+  "f_hydrophobic_5_z",
+  "f_donor_8_z",
+  "f_acceptor_8_z",
+  "f_cation_8_z",
+  "f_anion_8_z",
+  "f_aromatic_8_z",
+  "f_hydrophobic_8_z",
+  "f_donor_12_z",
+  "f_acceptor_12_z",
+  "f_cation_12_z",
+  "f_anion_12_z",
+  "f_aromatic_12_z",
+  "f_hydrophobic_12_z",
+  "kd_mean_z",
+  "kd_sum_z",
+  "bfac_mean_z",
+  "bfac_std_z",
+  "n_res_5_z",
+  "n_res_12_z",
+  "hb_balance_z",
+  "charge_balance_z",
+  "polar_apolar_ratio_z",
+  "donor_acceptor_per_volume_z",
+  "pot_f_hbd_z",
+  "pot_f_hba_z",
+  "pot_f_hydrophobic_z",
+  "pot_f_aromatic_z",
+  "pot_f_cation_z",
+  "pot_f_anion_z",
+  "pot_f_halogen_z",
+  "pot_n_hbd_z",
+  "pot_n_hba_z",
+  "pot_n_hydrophobic_z",
+  "pot_n_aromatic_z",
+  "pot_n_cation_z",
+  "pot_n_anion_z",
+  "pot_n_halogen_z",
+  "pot_classes_mean_z",
+  "pot_f_multi2_z",
+  "pot_f_multi3_z",
+  "pot_f_polar_apolar_z",
+  "pot_f_hbd_hba_z",
+  "pot_best_point_classes_z",
+  "pot_volume_multi3_z",
+  "prot_n_res_z",
+  "n_cands_z"
+ ],
+ "n_features": 218,
+ "graded": true,
+ "zscore": true,
+ "calibration": {
+  "ece_raw_sigmoid": 0.0334652433350822,
+  "ece_isotonic": 0.003999711104980659,
+  "brier_raw_sigmoid": 0.07857600408946244,
+  "brier_isotonic": 0.07622405955544152,
+  "mean_predicted": 0.180463422333426,
+  "base_rate": 0.18062524121960633
+ },
+ "geometry": {
+  "GRID": 1.0,
+  "CLASH": 3.0,
+  "RAY_LEN": 8.0,
+  "RAY_HIT": 2.0,
+  "RAY_STEP": 1.0,
+  "MIN_BURIED": 8,
+  "DETECT_MIN_BURIED": 16,
+  "NMS_RADIUS": 6.0,
+  "MIN_POINTS": 12,
+  "MAX_SITES": 30,
+  "FILL_MIN_BURIED": 10,
+  "CAV_R": 8.0,
+  "ENV_R": 8.0,
+  "min_buried": 16,
+  "nms": 6.0,
+  "max_sites": 30,
+  "fill_min_buried": 10
+ },
+ "results": {
+  "native order (detector score)": {
+   "top1": {
+    "mean": 0.5162037037037037,
+    "lo": 0.46511627906976744,
+    "hi": 0.564523596176822
+   },
+   "top3": {
+    "mean": 0.7453703703703703,
+    "lo": 0.7011693802521008,
+    "hi": 0.786814058956916
+   },
+   "topN": {
+    "mean": 0.6412037037037037,
+    "lo": 0.5936054604701192,
+    "hi": 0.6839944422453542
+   },
+   "topN2": {
+    "mean": 0.8125,
+    "lo": 0.7735793951684007,
+    "hi": 0.8514174199973733
+   },
+   "mrr": {
+    "mean": 0.6541668029220091,
+    "lo": 0.6147871021181369,
+    "hi": 0.6905389797404986
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.0,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": 0.0,
+     "lo": 0.0,
+     "hi": 0.0,
+     "p_le_0": 1.0
+    },
+    "topN2": {
+     "diff": 0.0,
+     "lo": 0.0,
+     "hi": 0.0,
+     "p_le_0": 1.0
+    }
+   }
+  },
+  "largest cavity first": {
+   "top1": {
+    "mean": 0.18055555555555555,
+    "lo": 0.14058771049403368,
+    "hi": 0.22046042319749212
+   },
+   "top3": {
+    "mean": 0.3541666666666667,
+    "lo": 0.30309909155653175,
+    "hi": 0.4
+   },
+   "topN": {
+    "mean": 0.2777777777777778,
+    "lo": 0.2300643965587374,
+    "hi": 0.32413793103448274
+   },
+   "topN2": {
+    "mean": 0.42824074074074076,
+    "lo": 0.37641047244585907,
+    "hi": 0.4775828073639218
+   },
+   "mrr": {
+    "mean": 0.31855996832216005,
+    "lo": 0.28148556140667974,
+    "hi": 0.35509922215671946
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.0,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": -0.33564814814814814,
+     "lo": -0.3958333333333333,
+     "hi": -0.27207169803020137,
+     "p_le_0": 1.0
+    },
+    "topN2": {
+     "diff": -0.38425925925925924,
+     "lo": -0.4406411847629555,
+     "hi": -0.32722791334288587,
+     "p_le_0": 1.0
+    }
+   }
+  },
+  "most buried first": {
+   "top1": {
+    "mean": 0.35185185185185186,
+    "lo": 0.3060747663551402,
+    "hi": 0.4023084934043045
+   },
+   "top3": {
+    "mean": 0.6851851851851852,
+    "lo": 0.6386870941558441,
+    "hi": 0.7316542093901781
+   },
+   "topN": {
+    "mean": 0.5254629629629629,
+    "lo": 0.477644416631901,
+    "hi": 0.5770203870351198
+   },
+   "topN2": {
+    "mean": 0.7662037037037037,
+    "lo": 0.7243676851779123,
+    "hi": 0.8074267725455595
+   },
+   "mrr": {
+    "mean": 0.5493435138019442,
+    "lo": 0.5151787007891518,
+    "hi": 0.5864551764285414
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.0,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": -0.16435185185185186,
+     "lo": -0.22535612307100003,
+     "hi": -0.09767441860465116,
+     "p_le_0": 1.0
+    },
+    "topN2": {
+     "diff": -0.046296296296296294,
+     "lo": -0.09152402836134453,
+     "hi": -0.002272470176881943,
+     "p_le_0": 0.9815
+    }
+   }
+  },
+  "LightGBM LambdaRank (218 features)": {
+   "top1": {
+    "mean": 0.7816358024691357,
+    "lo": 0.7396072303921568,
+    "hi": 0.822900403683385
+   },
+   "top3": {
+    "mean": 0.8996913580246914,
+    "lo": 0.8713593103134525,
+    "hi": 0.9284129100139948
+   },
+   "topN": {
+    "mean": 0.8348765432098766,
+    "lo": 0.7980012849700664,
+    "hi": 0.8708276456642
+   },
+   "topN2": {
+    "mean": 0.9251543209876544,
+    "lo": 0.9001572327044024,
+    "hi": 0.9500009321401939
+   },
+   "mrr": {
+    "mean": 0.8475916920902443,
+    "lo": 0.817699610088613,
+    "hi": 0.8767969729385574
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.004756492286241539,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": 0.26543209876543206,
+     "lo": 0.21720481272209988,
+     "hi": 0.31780130067801293,
+     "p_le_0": 0.0
+    },
+    "topN2": {
+     "diff": 0.11265432098765432,
+     "lo": 0.08236604185688455,
+     "hi": 0.14647690920258902,
+     "p_le_0": 0.0
+    }
+   }
+  },
+  "LightGBM LambdaRank (218 features), seed ensemble": {
+   "top1": {
+    "mean": 0.7916666666666666,
+    "lo": 0.749985632183908,
+    "hi": 0.831776239286791
+   },
+   "top3": {
+    "mean": 0.8981481481481481,
+    "lo": 0.8679234538187133,
+    "hi": 0.9279155803524872
+   },
+   "topN": {
+    "mean": 0.8449074074074074,
+    "lo": 0.8078614045383411,
+    "hi": 0.879741683378851
+   },
+   "topN2": {
+    "mean": 0.9282407407407407,
+    "lo": 0.9027762066365008,
+    "hi": 0.9532331625316035
+   },
+   "mrr": {
+    "mean": 0.8530003336426947,
+    "lo": 0.8216981469065168,
+    "hi": 0.88253981578571
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.0,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": 0.27546296296296297,
+     "lo": 0.2282321767416644,
+     "hi": 0.3287379621000311,
+     "p_le_0": 0.0
+    },
+    "topN2": {
+     "diff": 0.11574074074074074,
+     "lo": 0.08454021228822209,
+     "hi": 0.14953271028037382,
+     "p_le_0": 0.0
+    }
+   }
+  },
+  "LightGBM LambdaRank (218 features), calibrated": {
+   "top1": {
+    "mean": 0.7870370370370371,
+    "lo": 0.7431802543786489,
+    "hi": 0.8288288288288288
+   },
+   "top3": {
+    "mean": 0.9004629629629629,
+    "lo": 0.8715505016866124,
+    "hi": 0.9298815359477124
+   },
+   "topN": {
+    "mean": 0.8472222222222222,
+    "lo": 0.8086098951440497,
+    "hi": 0.8827653432458082
+   },
+   "topN2": {
+    "mean": 0.9282407407407407,
+    "lo": 0.9025522041763341,
+    "hi": 0.9529431504145282
+   },
+   "mrr": {
+    "mean": 0.8516586005301283,
+    "lo": 0.8207945354572288,
+    "hi": 0.8813286444905353
+   },
+   "n": 432,
+   "ceiling": 0.9884259259259259,
+   "seed_sd_top1": 0.0,
+   "paired_vs_native_order": {
+    "top1": {
+     "diff": 0.2708333333333333,
+     "lo": 0.22273143443981372,
+     "hi": 0.32464759489746203,
+     "p_le_0": 0.0
+    },
+    "topN2": {
+     "diff": 0.11574074074074074,
+     "lo": 0.0851063829787234,
+     "hi": 0.14889262820512816,
+     "p_le_0": 0.0
+    }
+   }
+  }
+ }
+}
