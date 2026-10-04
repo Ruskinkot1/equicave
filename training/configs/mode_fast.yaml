@@ -1,0 +1,57 @@
+# Mode "fast" (screening): no language model, vector channels only, no recycling.
+# Thousands of structures on modest hardware; ranked sites are the only output that matters here.
+# Definitions (lattice, closure, labels, metrics) are identical to the accurate mode, so numbers stay comparable.
+data:
+  manifest: data/processed/manifest.csv
+  pdb_dir: data/pockets_ds/pdb
+  cache_dir: data/cache/net
+  esm: null
+  n_probe: 384
+  n_surf: 256
+  limit: 0
+  require_interaction: true
+  druglike_only: false
+  k_scale: 0.6
+split:
+  val_fold: 0
+model:
+  backbone: cartesian
+  lmax: 2
+  recycles: 0
+  dim: 64
+  layers: 3
+  heads: 8
+  n_rbf: 32
+  cutoff: 10.0
+  equivariant: true
+  use_vectors: true
+  use_tensors: false
+  chiral: true
+  use_surface: true
+  use_probes: true
+  dropout: 0.1
+loss:
+  hungarian: true
+  mask_frac: 0.15
+  recycle_weight: 0.5
+  w_seq: 0.3
+  w_size: 0.1
+  w_res: 1.0
+  w_occ: 1.0
+  w_center: 0.5
+  w_conf: 0.5
+  w_hot: 1.0
+  w_prop: 0.5
+  occ_pos_weight: 3.0
+  res_pos_weight: 3.0
+optim:
+  lr: 0.0005
+  weight_decay: 0.01
+  epochs: 40
+  accumulate: 8
+  warmup_epochs: 2
+  ema: 0.999
+  patience: 10
+  seed: 0
+  rotate: true
+  amp: bf16

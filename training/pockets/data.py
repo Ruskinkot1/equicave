@@ -1,8 +1,11 @@
 """Featurisation of one structure for EquiCave-Net and the on-disk cache used by training.
 
 Node types and inputs
-  res   one per residue at CA: one-hot residue (21) + ESM-2 embedding (optional) + [b-factor z, relative SASA proxy]
-        initial vectors: N->CA, C->CA, CA->CB (virtual CB for GLY)                         -> feat_res, vec0
+  res   one per residue at CA: one-hot residue (21) + 14 amino-acid property scalars (`equicave.residues`) +
+        2 pocket-facing cosines + ESM-2 embedding (optional) + [b-factor z, local density]
+        initial vectors: N->CA, C->CA, CA->CB(virtual for GLY), CA->side-chain centroid, CA->functional-group centroid
+        The last two say which way the residue's chemistry faces, which is what distinguishes an Asp whose
+        carboxylate lines the cavity from one pointing at the solvent.
   probe free cavity lattice points (buriedness >= FILL_MIN_BURIED, deep points first), <= n_probe
         scalars: buriedness/26, distance to protein/8, deep flag, counts of atoms within 4/6/8 A (scaled)
         initial vectors: unit vector to nearest atom, mean direction to atoms within 6 A, zero
@@ -20,7 +23,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
-from equicave import ccd, detect, labels as LB, pockets as pk, structure
+from equicave import ccd, detect, labels as LB, pockets as pk, residues as resprops, structure
 
 RES = list("ACDEFGHIKLMNPQRSTVWY") + ["X"]
 ELEM = ["C", "N", "O", "S", "X"]
@@ -33,7 +36,7 @@ def onehot(idx: np.ndarray, n: int) -> np.ndarray:
 
 
 def backbone_vectors(st: dict, rt: dict) -> np.ndarray:
-    """[L, 3, 3]: N->CA, C->CA, CA->CB (virtual CB from backbone when missing)."""
+    """[L, 3, 3]: N->CA, C->CA, CA->CB (ideal virtual CB from the backbone when the real one is missing)."""
     pos = {}
     for i, (rid, name) in enumerate(zip(st["resid"], st["atom"])):
         if name in ("N", "C", "CB"):
@@ -101,7 +104,7 @@ def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple
 
 def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_probe: int = 768, n_surf: int = 512,
               seed: int = 0, entries: dict | None = None, k_scale: float = 1.0, druglike_only: bool = False,
-              require_interaction: bool = True) -> dict | None:
+              require_interaction: bool = True, residue_chemistry: bool = True) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable."""
     rng = np.random.default_rng(seed)
     st = structure.read_pdb(pdb_path)
@@ -114,10 +117,16 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     bz = (st["bfactor"] - st["bfactor"].mean()) / (st["bfactor"].std() + 1e-6)
     res_b = np.array([bz[st["resid"] == r].mean() for r in rt["resid"]], np.float32)
     nb8 = np.array([len(tree.query_ball_point(c, 8.0)) for c in rt["ca"]], np.float32)   # local density ~ 1 - rSASA
-    feat_res = np.concatenate([onehot(ridx, 21), res_b[:, None], (nb8[:, None] / 60.0)], 1).astype(np.float32)
+    parts = [onehot(ridx, 21)]
+    if residue_chemistry:
+        parts.append(resprops.properties(rt["resname"]).astype(np.float32))
+    feat_res = np.concatenate(parts + [res_b[:, None], (nb8[:, None] / 60.0)], 1).astype(np.float32)
     if esm is not None:
         feat_res = np.concatenate([feat_res, esm.astype(np.float32)], 1)
     vec_res = backbone_vectors(st, rt)
+    if residue_chemistry:
+        vec_res = np.concatenate([vec_res, resprops.side_chain_vectors(st, rt)[:, 1:]], 1)
+    vec_res = vec_res.astype(np.float32)
     # probes: cavity lattice points
     cands, field = detect.detect_sites(xyz, return_field=True)
     lo, bur, free, dist = field["origin"], field["buried"], field["free"], field["dist"]
@@ -141,7 +150,7 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         if nb:
             d = xyz[nb] - ppos[i]; v2[i] = d.mean(0)
     v2 /= np.maximum(np.linalg.norm(v2, axis=1, keepdims=True), 1e-6)
-    vec_probe = np.stack([v1, v2, np.zeros_like(v1)], 1).astype(np.float32)
+    vec_probe = np.stack([v1, v2] + [np.zeros_like(v1)] * (vec_res.shape[1] - 2), 1).astype(np.float32)
     # surface points
     spts, owner = pk.sas_points(xyz, pk.vdw_radii(st["element"]), n_sphere=30)
     if len(spts) > n_surf:
@@ -153,7 +162,9 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     feat_surf = np.concatenate([onehot(sel_e, 5), onehot(ridx[sres], 21), sb[:, None] / 26], 1).astype(np.float32)
     normal = spts - xyz[owner]; normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-6)
     ca_atom = xyz[owner] - rt["ca"][sres]; ca_atom /= np.maximum(np.linalg.norm(ca_atom, axis=1, keepdims=True), 1e-6)
-    vec_surf = np.stack([normal, ca_atom, np.zeros_like(normal)], 1).astype(np.float32)
+    vec_surf = np.stack([normal, ca_atom] + [np.zeros_like(normal)] * (vec_res.shape[1] - 2), 1).astype(np.float32)
+    if residue_chemistry:                                                # invariant: does the chemistry face the cavity
+        feat_res = np.concatenate([feat_res, resprops.pocket_facing(st, rt, ppos).astype(np.float32)], 1)
     # graph
     pos = np.concatenate([rt["ca"], ppos, spts]).astype(np.float32)
     types = np.concatenate([np.zeros(len(rt["ca"])), np.ones(len(ppos)), np.full(len(spts), 2)]).astype(np.int64)
@@ -256,7 +267,7 @@ def random_rotation(b: dict, rng: np.random.Generator):
 
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
                 n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
-                require_interaction: bool = True) -> list[str]:
+                require_interaction: bool = True, residue_chemistry: bool = True) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent."""
     import csv
     from training.pockets.esm_embed import Embedder, cached
@@ -278,7 +289,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
             st = structure.read_pdb(p); rt = structure.residue_table(st)
             e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
             d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
-                          druglike_only=druglike_only, require_interaction=require_interaction)
+                          druglike_only=druglike_only, require_interaction=require_interaction,
+                          residue_chemistry=residue_chemistry)
             if d is not None and "y_res" in d:
                 d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                 save(d, f); done.append(r["pdb"])

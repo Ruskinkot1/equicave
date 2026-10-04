@@ -12,5 +12,6 @@ ablations:
   no_sequence_edges: {model.n_edge_scalar: 0}
   no_masked_residue: {loss.mask_frac: 0.0, loss.w_seq: 0.0}
   nearest_probe_loss: {loss.hungarian: false}
+  no_residue_chemistry: {data.residue_chemistry: false}
   e3nn_l2: {model.backbone: e3nn, model.lmax: 2}
   e3nn_l3: {model.backbone: e3nn, model.lmax: 3}

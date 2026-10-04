@@ -2,6 +2,9 @@
 
 Self-contained model of protein binding pockets. One structure in, three outputs:
 
+Three operating modes (`equicave.modes`): **fast** for screening thousands of structures, **accurate** for a single
+target you are designing against, **peptide** for peptide binders.
+
 1. **Ranked binding sites** — own geometric candidate generator plus a learned re-ranker (and an equivariant network).
 2. **Pocket property classes** — multi-label: ligand class, size, buriedness, polarity, charge.
 3. **Hotspot field** — per grid point, the probability of a ligand atom of each chemical class. Labels are
@@ -62,6 +65,8 @@ different ligand filters, chain handling and splits. The comparison we trust is 
 which re-runs fpocket and P2Rank on our structures with our labels.
 
 ## Install and train
+
+Step-by-step instructions for a new collaborator: [`RUN.md`](RUN.md).
 
 ```bash
 make setup                              # pip install -e ".[dev,train,viz]"

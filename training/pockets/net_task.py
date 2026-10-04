@@ -165,11 +165,12 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     mc = dict(cfg["model"])
     backbone = mc.pop("backbone", "cartesian")
     mc["n_edge_scalar"] = d0["edge_scalar"].shape[1] if "edge_scalar" in d0 else 0
+    mc["n_init_vec"] = int(d0["vec0"].shape[1])
     kw = dict(n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1])
     if backbone == "e3nn":
         from training.pockets.model_e3nn import EquiCaveNetE3
         model = EquiCaveNetE3(in_dims, **{k: v for k, v in mc.items() if k in
-                                          ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout")}, **kw).to(device)
+                                          ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout", "n_init_vec")}, **kw).to(device)
     else:
         model = M.EquiCaveNet(in_dims, **mc, **kw).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["optim"]["lr"], weight_decay=cfg["optim"]["weight_decay"])
@@ -200,7 +201,7 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         if ev["val_score"] > best or math.isnan(ev["val_score"]):
             best, bad = ev["val_score"], 0; best_state = copy.deepcopy(ema.shadow.state_dict())
             torch.save(dict(state=best_state, in_dims=in_dims, cfg=cfg, n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1],
-                            n_edge_scalar=mc.get("n_edge_scalar", 0)), out_dir / "model.pt")
+                            n_edge_scalar=mc.get("n_edge_scalar", 0), n_init_vec=mc.get("n_init_vec", 3)), out_dir / "model.pt")
         else:
             bad += 1
             if bad >= cfg["optim"]["patience"]:
@@ -215,10 +216,11 @@ def load_model(path, device):
     ck = torch.load(path, map_location=device, weights_only=False)
     mc = dict(ck["cfg"]["model"]); backbone = mc.pop("backbone", "cartesian")
     mc.setdefault("n_edge_scalar", ck.get("n_edge_scalar", 0))
+    mc.setdefault("n_init_vec", ck.get("n_init_vec", 3))
     if backbone == "e3nn":
         from training.pockets.model_e3nn import EquiCaveNetE3
         m = EquiCaveNetE3(ck["in_dims"], n_hot=ck["n_hot"], n_props=ck["n_props"],
-                          **{k: v for k, v in mc.items() if k in ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout")}).to(device)
+                          **{k: v for k, v in mc.items() if k in ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout", "n_init_vec")}).to(device)
         m.load_state_dict(ck["state"]); m.eval()
         return m, ck["cfg"]
     m = M.EquiCaveNet(ck["in_dims"], n_hot=ck["n_hot"], n_props=ck["n_props"], **mc).to(device)
@@ -233,7 +235,8 @@ def run(a) -> int:
     out_dir = run_dir(a.out, f"{tag}_fold{cfg['split']['val_fold']}_seed{cfg['optim']['seed']}")
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))
     log(f"config: {json.dumps(cfg)}")
-    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True))
+    ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True),
+                       dc.get("residue_chemistry", True))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold
