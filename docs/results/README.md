@@ -16,6 +16,22 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## Open discrepancy: the cleaned-subset number does not transfer to COACH420
+
+The ranker trained on the 432 cleaned structures reaches 0.806 top-1 in its own cross-validation (0.810 calibrated)
+and **0.637** on the 179 comparable COACH420 structures -- below the detector's own ordering there (0.642), and
+below the 0.704 that an older model with 32 features reached on the same subset
+(`docs/results/eval_coach420_n3.md` against `docs/results/eval_coach420.md`). Two things changed at once between
+those two models, so the gap is not yet attributable: the feature count (32 to 236 with z-scores) and the training
+set (all 1367 manifest structures to the 432 that share no 30 %-identity cluster with any benchmark). A model with
+236 columns fitted on 432 structures may simply be data-starved, in which case the cleaned-subset
+cross-validation is measuring a model that cannot be served.
+
+Until that is separated, **the cleaned-subset top-1 figures should not be read as benchmark performance.** The
+runs that separate them -- the same 272-column feature set trained on all 1367 structures, with and without the
+per-point group, evaluated on the same COACH420 subset -- are in progress; the comparable row there stays the
+structures that are not train-similar, which is leakage-free for a model trained on the full manifest.
+
 ## Negative results worth keeping
 
 **A cascade re-ranker over the top candidates is worse than one model over all of them** (measured 2026-10-04 on the

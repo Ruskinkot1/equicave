@@ -32,19 +32,28 @@ Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the s
 ### Ranking on the leakage-free subset (432 structures, 383 clusters, 118-feature table)
 Cross-validated by 30 %-identity cluster, five seeds. Feature-group ablations, each the full model minus one group:
 
+With the per-point ligandability group added (272 columns, top-1 0.806, calibrated 0.810, top-(N+2) 0.946):
+
 | group removed | top-1 | cost |
 |---|---|---|
-| nothing (full model) | 0.788 [0.750, 0.828] | — |
-| chemistry (14) | 0.749 [0.706, 0.789] | −0.039 |
-| shell (46) | 0.755 [0.713, 0.796] | −0.033 |
-| geometry (18) | 0.767 [0.728, 0.807] | −0.021 |
-| **potential (30)** | 0.767 [0.725, 0.811] | **−0.021** |
-| native (8) | 0.782 [0.742, 0.821] | −0.006 |
-| context (2) | 0.787 [0.746, 0.826] | −0.001 |
+| nothing (full model) | 0.806 [0.768, 0.842] | — |
+| **points (18)** | 0.787 [0.747, 0.827] | **−0.019** |
+| shell (46) | 0.789 [0.749, 0.830] | −0.017 |
+| potential (30) | 0.793 [0.754, 0.833] | −0.013 |
+| chemistry (14) | 0.800 [0.760, 0.837] | −0.006 |
+| native (8) | 0.804 [0.767, 0.843] | −0.002 |
+| geometry (18), context (2) | 0.808 | −0.000 |
 
-The interaction-potential group is now the joint third most valuable of the six. It was worth nothing at all before
-it was redefined: its features were availability flags that a 4.5–5.5 Å cutoff inside a protein always satisfies, so
-21 of the then 109 columns were constant and no ablation could have shown it.
+The per-point group is the most valuable of the seven, and its 18 columns are worth more than the 46 shell columns.
+The interaction-potential group, worth nothing at all before it was redefined — its features were availability flags
+that a 4.5–5.5 Å cutoff inside a protein always satisfies, so 21 of the then 109 columns were constant and no
+ablation could have shown it — is now third. Dropping the points group reproduces the independent 118-feature run
+(0.787 against 0.788), which is the consistency check on the two runs.
+
+> **These are cross-validation figures on the cleaned subset and do not transfer to COACH420**, where the same model
+> reaches 0.637. Training-set size and feature count both changed between the models being compared there; the runs
+> that separate the two are in progress. See the open discrepancy in `docs/results/README.md` before quoting any
+> number in this section.
 
 Earlier rows below were measured with the 109-feature table and are kept for comparison.
 Structures sharing a 30 %-identity cluster with COACH420, HOLO4K, LIGYSIS, CryptoBench or a held-out family are
