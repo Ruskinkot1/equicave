@@ -138,3 +138,49 @@ def test_auxiliary_losses_are_finite():
     assert torch.isfinite(M.masked_residue_loss(seq_logit, types, mask))
     assert float(M.masked_residue_loss(seq_logit, types, torch.zeros(10, dtype=torch.bool))) == 0.0
     assert torch.isfinite(M.size_loss(torch.randn(3), torch.tensor([12.0, 30.0, 8.0])))
+
+
+def test_invariant_arm_sees_the_geometry_and_is_invariant():
+    """The invariant ablation must change the mechanism, not take the geometry away.
+
+    With `invariant_mode="frames"` the initial vectors are scalarised in each node's own local frame, so the arm
+    receives the same geometric information as the equivariant model at the same depth and width. Two things must
+    hold: the outputs must be invariant under rotation (it is an invariant model), and they must *depend* on the
+    initial vectors (it is not blind to them). The old behaviour, which simply discarded them, is still available as
+    `invariant_mode="distances"` and is asserted to be blind, which is why it is not the default.
+    """
+    torch.manual_seed(0)
+    b = _batch()
+    R, t = _rot(5), torch.tensor([4.0, -1.0, 2.0])
+
+    frames = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, equivariant=False,
+                           invariant_mode="frames").eval()
+    with torch.no_grad():
+        o1, o2 = frames(b), frames(_apply(b, R, t))
+    assert torch.allclose(o1["res_logit"], o2["res_logit"], atol=1e-4), "the invariant arm must be rotation invariant"
+    assert torch.allclose(o1["hot_logit"], o2["hot_logit"], atol=1e-4)
+
+    b2 = dict(b); b2["vec0"] = torch.zeros_like(b["vec0"])           # take the geometry away on purpose
+    with torch.no_grad():
+        o3 = frames(b2)
+    assert not torch.allclose(o1["res_logit"], o3["res_logit"], atol=1e-4), \
+        "the frames arm must actually use the initial vectors, otherwise it is blind, not invariant"
+
+    blind = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, equivariant=False,
+                          invariant_mode="distances").eval()
+    with torch.no_grad():
+        o4, o5 = blind(b), blind(b2)
+    assert torch.allclose(o4["res_logit"], o5["res_logit"], atol=1e-6), \
+        "the distances-only arm ignores the vectors by construction; that is why it is not the default"
+
+
+def test_local_frame_scalars_are_rotation_invariant():
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=16, layers=1, equivariant=False, invariant_mode="frames")
+    v = torch.randn(20, 5, 3)
+    R = _rot(7)
+    a = net.local_frame_scalars(v)
+    b = net.local_frame_scalars(torch.einsum("nkc,dc->nkd", v, R))
+    assert torch.allclose(a, b, atol=1e-4), "frame coordinates must not change when the whole structure rotates"
+    deg = v.clone(); deg[:, 1] = 0.0                                  # degenerate frame: documented fallback
+    assert torch.isfinite(net.local_frame_scalars(deg)).all()

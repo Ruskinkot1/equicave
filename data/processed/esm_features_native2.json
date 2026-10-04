@@ -1,7 +1,7 @@
 {
  "model": "facebook/esm2_t12_35M_UR50D",
  "radius": 8.0,
- "dims": 8,
+ "dims": 16,
  "features": [
   "esm_n_res",
   "esm_norm",
@@ -14,6 +14,14 @@
   "esm_mean5",
   "esm_mean6",
   "esm_mean7",
+  "esm_mean8",
+  "esm_mean9",
+  "esm_mean10",
+  "esm_mean11",
+  "esm_mean12",
+  "esm_mean13",
+  "esm_mean14",
+  "esm_mean15",
   "esm_max0",
   "esm_max1",
   "esm_max2",
@@ -21,7 +29,15 @@
   "esm_max4",
   "esm_max5",
   "esm_max6",
-  "esm_max7"
+  "esm_max7",
+  "esm_max8",
+  "esm_max9",
+  "esm_max10",
+  "esm_max11",
+  "esm_max12",
+  "esm_max13",
+  "esm_max14",
+  "esm_max15"
  ],
- "n": 360
+ "n": 40986
 }

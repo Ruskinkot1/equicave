@@ -21,6 +21,7 @@ model:
   n_rbf: 32
   cutoff: 10.0
   equivariant: true
+  invariant_mode: frames     # only read when equivariant is false: frames (fair) or distances (blinded)
   use_vectors: true
   use_tensors: true
   chiral: true

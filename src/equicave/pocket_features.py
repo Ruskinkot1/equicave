@@ -46,7 +46,12 @@ POTENTIAL = [f"pot_f_{c}" for c in POT_CLASSES] + [f"pot_n_{c}" for c in POT_CLA
              "pot_best_point_classes", "pot_volume_multi3"]
 CONTEXT = ["prot_n_res", "n_cands"]
 FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + POTENTIAL + CONTEXT
-NET_FEATURES = ["net_seg", "net_center_conf", "net_hot_mean"]          # appended when a network model scores the sites
+# Network features, all rotation-invariant scalars. The three originals are kept first for compatibility; the rest
+# preserve what the three threw away: each hotspot class separately, at two radii, with mean and max.
+NET_FEATURES = (["net_seg", "net_center_conf", "net_hot_mean", "net_n_centers", "net_center_dist"]
+                + [f"net_{k}_{r}" for r in (4, 8) for k in ("occ_mean", "occ_max", "conf_mean", "conf_max",
+                                                            "offset_mean", "n_probes")]
+                + [f"net_hot{j}_{s}_{r}" for r in (4, 8) for j in range(7) for s in ("mean", "max")])
 PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
 GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, potential=POTENTIAL,

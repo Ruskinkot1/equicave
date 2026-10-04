@@ -6,7 +6,8 @@ ablations:
   no_esm: {data.esm: null}
   no_tensors: {model.use_tensors: false}            # degree <= 1 (vector channels only)
   no_vectors: {model.use_vectors: false}            # degree 0 only but still gated by edge directions? no: distances only
-  invariant: {model.equivariant: false}             # distances-only GNN, same depth and width
+  invariant_frames: {model.equivariant: false, model.invariant_mode: frames}   # fair: same geometry, scalarised in a local frame
+  invariant_blind: {model.equivariant: false, model.invariant_mode: distances}  # the usual confound: geometry removed as well
   achiral: {model.chiral: false}
   no_recycling: {model.recycles: 0}
   no_sequence_edges: {model.n_edge_scalar: 0}

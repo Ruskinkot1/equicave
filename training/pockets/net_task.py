@@ -94,18 +94,46 @@ def predict_sites(out, probe_pos, nms: float = 6.0, max_sites: int = 30):
     return c[keep], conf[keep]
 
 
-def net_features(out, probe_pos, centers: np.ndarray, r: float = 4.0) -> list[dict]:
-    """Per native candidate centre: network features for the ranker."""
+def net_features(out, probe_pos, centers: np.ndarray, r: float = 4.0, radii=(4.0, 8.0)) -> list[dict]:
+    """Per native candidate centre: the network's view of that site, as features a ranker can use.
+
+    Three scalars threw away most of what the network knows: the seven hotspot classes were collapsed by a max, so a
+    strongly hydrophobic site and a strongly polar one produced the same number. Here each class is kept, at two
+    radii, with mean and max, together with occupancy, confidence, how many predicted centres fall nearby and how far
+    the nearest one is. Everything is a rotation-invariant scalar: no vector component is exported, or the ranker
+    would become frame-dependent and nothing downstream would notice.
+    """
     import torch
     from scipy.spatial import cKDTree
-    occ = torch.sigmoid(out["occ_logit"]).detach().cpu().numpy(); conf = torch.sigmoid(out["conf_logit"]).detach().cpu().numpy()
-    hot = torch.sigmoid(out["hot_logit"]).detach().cpu().numpy().max(1); pc = out["center"].detach().cpu().numpy()
+    occ = torch.sigmoid(out["occ_logit"]).detach().cpu().numpy()
+    conf = torch.sigmoid(out["conf_logit"]).detach().cpu().numpy()
+    hot = torch.sigmoid(out["hot_logit"]).detach().cpu().numpy()
+    pc = out["center"].detach().cpu().numpy()
+    offset_norm = np.linalg.norm(out["offset"].detach().cpu().numpy(), axis=1)
     tp, tc = cKDTree(probe_pos), cKDTree(pc)
+    n_hot = hot.shape[1]
     rows = []
     for ctr in centers:
-        nb = tp.query_ball_point(ctr, r); nc = tc.query_ball_point(ctr, r)
-        rows.append(dict(net_seg=float(occ[nb].mean()) if nb else 0.0, net_center_conf=float(conf[nc].max()) if nc else 0.0,
-                         net_hot_mean=float(hot[nb].mean()) if nb else 0.0))
+        row = {}
+        for rad in radii:
+            nb = tp.query_ball_point(ctr, rad)
+            tag = int(rad)
+            row[f"net_occ_mean_{tag}"] = float(occ[nb].mean()) if nb else 0.0
+            row[f"net_occ_max_{tag}"] = float(occ[nb].max()) if nb else 0.0
+            row[f"net_conf_mean_{tag}"] = float(conf[nb].mean()) if nb else 0.0
+            row[f"net_conf_max_{tag}"] = float(conf[nb].max()) if nb else 0.0
+            row[f"net_offset_mean_{tag}"] = float(offset_norm[nb].mean()) if nb else 0.0
+            for j in range(n_hot):
+                row[f"net_hot{j}_mean_{tag}"] = float(hot[nb, j].mean()) if nb else 0.0
+                row[f"net_hot{j}_max_{tag}"] = float(hot[nb, j].max()) if nb else 0.0
+            row[f"net_n_probes_{tag}"] = float(len(nb))
+        nc = tc.query_ball_point(ctr, r)
+        row["net_center_conf"] = float(conf[nc].max()) if nc else 0.0
+        row["net_n_centers"] = float(len(nc))
+        row["net_center_dist"] = float(np.linalg.norm(pc - ctr, axis=1).min()) if len(pc) else 99.0
+        row["net_seg"] = row["net_occ_mean_4"]                      # kept so older models and tables still work
+        row["net_hot_mean"] = float(np.mean([row[f"net_hot{j}_mean_4"] for j in range(n_hot)]))
+        rows.append(row)
     return rows
 
 
@@ -127,10 +155,13 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
             if "prop_logit" in out:
                 yp.append(d["y_prop"]); pp.append(torch.sigmoid(out["prop_logit"]).cpu().numpy())
             c, conf = predict_sites(out, d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]])
-            L = d["lig_xyz"]; n_sites = len(d["site_centers"])
+            L = d["lig_xyz"]; sites = d["site_centers"]; n_sites = len(sites)
             for k, ctr in enumerate(c, 1):
-                rank_rows.append(dict(pdb=d["pdb"], cluster30=str(d.get("cluster30", d["pdb"])), n_sites=n_sites, rank=k, score=float(conf[k - 1]),
-                                      label=int(np.linalg.norm(L - ctr, axis=1).min() <= 4.0)))
+                dca = float(np.linalg.norm(L - ctr, axis=1).min())
+                dcc = float(np.linalg.norm(sites - ctr, axis=1).min()) if len(sites) else float("inf")
+                rank_rows.append(dict(pdb=d["pdb"], cluster30=str(d.get("cluster30", d["pdb"])), n_sites=n_sites, rank=k,
+                                      score=float(conf[k - 1]), label=int(dca <= 4.0), label_dcc=int(dcc <= 4.0),
+                                      label_dcc10=int(dcc <= 10.0), dca=dca, dcc=dcc))
     res = {}
     for k in ("res", "occ"):
         y, p = np.concatenate(ys[k]), np.concatenate(ps[k])
@@ -151,8 +182,14 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
         res["prop_auroc_per_class"] = [MT.auroc(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
         res["prop_ap_per_class"] = [MT.average_precision(Y[:, j], P[:, j]) for j in range(Y.shape[1])]
     if rank_rows:
-        per = MT.per_structure(pd.DataFrame(rank_rows), "score")
+        rr = pd.DataFrame(rank_rows)
+        per = MT.per_structure(rr, "score")
         res["net_sites"] = {k: float(per[k].mean()) for k in ("top1", "top3", "topN", "topN2", "ceiling")}
+        # DCC, the criterion the literature's equivariant gains live in, at 4 A and at the 10 A LIGYSIS recommends
+        for name, col in (("net_sites_dcc4", "label_dcc"), ("net_sites_dcc10", "label_dcc10")):
+            p_ = MT.per_structure(rr, "score", label_col=col)
+            res[name] = {k: float(p_[k].mean()) for k in ("top1", "top3", "topN", "topN2", "ceiling")}
+        res["net_center_error_median"] = float(rr.groupby("pdb")["dcc"].min().median())
     res["val_score"] = float(np.nanmean([res["occ_ap"], res["res_ap"]]))
     return res
 
@@ -166,6 +203,7 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     backbone = mc.pop("backbone", "cartesian")
     mc["n_edge_scalar"] = d0["edge_scalar"].shape[1] if "edge_scalar" in d0 else 0
     mc["n_init_vec"] = int(d0["vec0"].shape[1])
+    mc.setdefault("invariant_mode", cfg["model"].get("invariant_mode", "frames"))
     kw = dict(n_hot=d0["y_hot"].shape[1], n_props=d0["y_prop"].shape[1])
     if backbone == "e3nn":
         from training.pockets.model_e3nn import EquiCaveNetE3

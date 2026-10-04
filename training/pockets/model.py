@@ -10,8 +10,19 @@ contractions <V_j, u>, u^T T_j u, |V_j|, |T_j|. Attention weights and all gates 
 network is SO(3)-equivariant by construction. Pseudo-scalars (triple products of vector channels) are added to the
 invariant stream when `chiral=True`, so mirror images are distinguished (SO(3), not O(3)).
 
-Ablations are switches: `use_vectors`, `use_tensors`, `equivariant` (False = distances-only invariant GNN with the
-same depth and width), `chiral`. Node types: 0 residue (CA), 1 cavity probe, 2 surface point; edge types are the
+Ablations are switches: `use_vectors`, `use_tensors`, `chiral`, and `equivariant`.
+
+**The invariant arm is a fair comparison, not a blinded one.** Setting `equivariant=False` must change exactly one
+thing: whether geometry is carried by steerable channels or by invariants. It must not also take the geometry away.
+The earlier version dropped `vec0` entirely, which removed the backbone directions, the side-chain chemistry vectors
+and the surface normals, so the arm measured "coordinates versus no coordinates" — the confound the pocket literature
+has been criticised for. With `invariant_mode="frames"` (the default when `equivariant=False`) every node's initial
+vectors are **scalarised in its own local frame**: a frame is built from two of the node's own vectors by
+Gram-Schmidt, and each vector is replaced by its three coordinates in that frame, which are rotation-invariant by
+construction. Degenerate frames (a probe with no atom within 6 A has a zero second vector) fall back to the axis-aligned
+frame, which is a documented approximation rather than a silent one. The invariant arm then sees the same geometric
+information, at the same depth and width, and only the mechanism differs. `invariant_mode="distances"` keeps the old
+blinded behaviour, available on purpose so the difference between the two can be reported. Node types: 0 residue (CA), 1 cavity probe, 2 surface point; edge types are the
 9 ordered type pairs. Heads: residue segmentation, probe occupancy, centre offset (an equivariant vector read out
 from V) + confidence, hotspot classes per probe, multi-label site properties from pooled probes.
 """
@@ -169,14 +180,20 @@ class EquiCaveNet(nn.Module):
     def __init__(self, in_dims: dict, dim: int = 96, layers: int = 4, heads: int = 4, n_rbf: int = 32, cutoff: float = 10.0,
                  n_hot: int = 7, n_props: int = 14, equivariant: bool = True, use_vectors: bool = True, use_tensors: bool = True,
                  chiral: bool = True, use_surface: bool = True, use_probes: bool = True, dropout: float = 0.0, n_init_vec: int = 3,
-                 recycles: int = 0, n_edge_scalar: int = 0, n_res_types: int = 21, **_ignored):
+                 recycles: int = 0, n_edge_scalar: int = 0, n_res_types: int = 21,
+                 invariant_mode: str = "frames", **_ignored):
         super().__init__()
         self.dim, self.equivariant = dim, equivariant
         self.recycles, self.n_edge_scalar = recycles, n_edge_scalar
+        self.invariant_mode = invariant_mode
+        self.n_init_vec = n_init_vec
         self.use_vectors = equivariant and use_vectors
         self.use_tensors = self.use_vectors and use_tensors
         self.use_surface, self.use_probes = use_surface, use_probes
-        self.embed = nn.ModuleDict({k: nn.Sequential(nn.Linear(v, dim), nn.SiLU(), nn.Linear(dim, dim)) for k, v in in_dims.items()})
+        # the invariant arm receives the same geometry as scalars: 3 coordinates per initial vector in a local frame
+        self.n_scalarised = 3 * n_init_vec if (not equivariant and invariant_mode == "frames") else 0
+        self.embed = nn.ModuleDict({k: nn.Sequential(nn.Linear(v + self.n_scalarised, dim), nn.SiLU(), nn.Linear(dim, dim))
+                                    for k, v in in_dims.items()})
         self.type_emb = nn.Embedding(3, dim)
         self.vec_in = nn.Linear(n_init_vec, dim, bias=False)
         self.layers = nn.ModuleList([GeoTensorAttention(dim, heads, n_rbf, cutoff, 9, self.use_vectors, self.use_tensors, chiral,
@@ -191,12 +208,37 @@ class EquiCaveNet(nn.Module):
         self.off_vec = nn.Linear(dim, 1, bias=False)                       # equivariant read-out from vector channels
         self.off_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant model: plain regression (not equivariant)
 
+    def local_frame_scalars(self, vec0: torch.Tensor) -> torch.Tensor:
+        """[N, 3 * K] rotation-invariant coordinates of a node's own vectors in a frame built from two of them.
+
+        e1 from the first non-degenerate vector, e2 the Gram-Schmidt complement of the second, e3 their cross
+        product; where that is degenerate the axis-aligned frame is used, which is an approximation only for nodes
+        whose own geometry is missing (a probe with no atom within 6 A). Each vector's three coordinates in the frame
+        are invariant under a global rotation, so the invariant arm sees the same geometry the equivariant one does.
+        """
+        v1, v2 = vec0[:, 0], vec0[:, 1] if vec0.shape[1] > 1 else vec0[:, 0]
+        e1 = v1 / v1.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        bad1 = v1.norm(dim=-1) < 1e-6
+        e1 = torch.where(bad1[:, None], torch.tensor([1.0, 0.0, 0.0], device=vec0.device).expand_as(e1), e1)
+        proj = v2 - (v2 * e1).sum(-1, keepdim=True) * e1
+        bad2 = proj.norm(dim=-1) < 1e-6
+        fallback = torch.tensor([0.0, 1.0, 0.0], device=vec0.device).expand_as(proj)
+        proj = torch.where(bad2[:, None], fallback - (fallback * e1).sum(-1, keepdim=True) * e1, proj)
+        e2 = proj / proj.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        e3 = torch.cross(e1, e2, dim=-1)
+        R = torch.stack([e1, e2, e3], dim=1)                       # [N, 3, 3] rows are the frame axes
+        return torch.einsum("nij,nkj->nki", R, vec0).reshape(len(vec0), -1)
+
     def trunk(self, b: dict, pos: torch.Tensor, ei: torch.Tensor, et: torch.Tensor, es):
         """One pass of the message-passing trunk at the given probe positions. Returns (x, V, T)."""
         x = torch.zeros(len(b["node_type"]), self.dim, device=pos.device)
+        inv_scalars = self.local_frame_scalars(b["vec0"]) if self.n_scalarised else None
         for k, idx in b["slices"].items():
             if len(idx):
-                x[idx] = self.embed[k](b[f"feat_{k}"])
+                f = b[f"feat_{k}"]
+                if inv_scalars is not None:
+                    f = torch.cat([f, inv_scalars[idx]], -1)
+                x[idx] = self.embed[k](f)
         x = x + self.type_emb(b["node_type"])
         V = torch.einsum("nkc,kf->nfc", b["vec0"], self.vec_in.weight.t()) if self.use_vectors else None
         T = sym_traceless(V, V) if self.use_tensors else None
