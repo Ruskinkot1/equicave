@@ -83,7 +83,7 @@ def load_set(name, limit, ligand_rule="mlig"):
     return out[:limit] if limit else out
 
 
-def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None):
+def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_model=None):
     cands = detect.detect_sites(st["xyz"])
     if not cands:
         return []
@@ -103,6 +103,9 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None):
             extra = NT.net_features(out, d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]], np.array([c["center"] for c in cands]))
             for r, e in zip(rows, extra):
                 r.update(e)
+    if point_model is not None:               # the ranker was trained with the per-point aggregates
+        for r, agg in zip(rows, pf.point_aggregates(cands, st, point_model)):
+            r.update(agg)
     if esm is not None:                       # the ranker was trained with language-model columns
         for r, ef in zip(rows, esm(pdb_path, np.array([c["center"] for c in cands]))):
             r.update(ef)
@@ -138,12 +141,24 @@ def one(task):
     if ranker is not None and any(f.startswith("esm_") for f in ranker[1]):
         from equicave.esm_features import EsmFeatures
         esm = EsmFeatures(args.get("esm_tag", "native2"))
+    point_model = None
+    if ranker is not None and any(f in pf.POINT_AGG for f in ranker[1]):
+        import lightgbm as lgb
+        path_pm = args.get("point_model") or str(REPO / "models/point_native.txt")
+        if not pathlib.Path(path_pm).exists():
+            return dict(pdb=pdb, status=f"point model {pathlib.Path(path_pm).name} missing"), []
+        # The default is the model fitted on all folds, which is correct for a benchmark structure outside the
+        # manifest and is leakage for one inside it -- those are the `train-similar` rows, reported separately. Note
+        # that the ranker learned these columns from *out-of-fold* point scores, so the full-fold model serves
+        # slightly sharper values than it was trained on; the shift is in the optimistic direction and is the reason
+        # the headline row is the one that excludes train-similar structures.
+        point_model = lgb.Booster(model_file=path_pm)
     net_model = net_cfg = None
     if args["net"]:
         from training.pockets import net_task as NT
         import torch
         net_model, net_cfg = NT.load_model(args["net"], torch.device("cpu"))
-    preds = predict_native(st, ranker, net_model, net_cfg, path, esm)
+    preds = predict_native(st, ranker, net_model, net_cfg, path, esm, point_model)
     out = []
     for p in preds:
         d = pk.dca(p["center"], L)
@@ -164,6 +179,8 @@ def main():
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
+    ap.add_argument("--point-model", default="", help="per-point ligandability booster; defaults to "
+                    "models/point_native.txt and is only loaded when the ranker needs its columns")
     ap.add_argument("--esm-tag", default="native2", help="which esm_features_<tag> projection to use at inference")
     ap.add_argument("--merge-radii", default="8,12", help="prediction-merging radii to report in addition to as-generated")
     ap.add_argument("--tag", default="", help="suffix for the output files, e.g. _all for the other ligand rule")
@@ -179,7 +196,7 @@ def main():
         except Exception as ex:  # noqa: BLE001
             print(f"  RCSB metadata failed for a batch: {ex}")
     train_cl = {r["cluster30"] for r in csv.DictReader(open(REPO / "data/processed/manifest.csv"))} if (REPO / "data/processed/manifest.csv").exists() else set()
-    args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag)
+    args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag, point_model=a.point_model)
     with ProcessPoolExecutor(a.jobs) as ex:
         res = list(ex.map(one, [(r, r.get("chain", ""), args) for r in rows], chunksize=2))
     summ = pd.DataFrame([s for s, _ in res]); cand = pd.DataFrame([c for _, cs in res for c in cs])
