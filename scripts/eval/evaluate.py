@@ -126,10 +126,21 @@ def one(task):
     pdb = r["pdb"]; path = fetch(pdb)
     if path is None:
         return dict(pdb=pdb, status="no_pdb"), []
-    st = structure.read_pdb(path, chains or None)
+    # Receptor context. Every COACH420 entry names a chain, and reading only that chain was costing us the benchmark:
+    # the candidate table is built on the whole assembly (scripts/train/build_native.py reads every chain), so a
+    # single-chain receptor moves the protein centroid and radius of gyration, changes prot_n_res and the candidate
+    # count, empties the 5/8/12 A shells of a neighbouring chain's atoms, and -- worst -- unburies every pocket that
+    # sits at a chain interface. Measured on the 179 comparable structures, the richer the feature set the worse the
+    # damage: the detector's own context-free score was unchanged at 0.642 top-1, a 32-feature ranker reached 0.704,
+    # and 236- and 272-feature rankers fell to 0.598 and 0.570, below no ranking at all. scripts/baselines/run_external.py
+    # gives the external tools every chain, so the truncation also biased the head-to-head against us.
+    # The chain in a benchmark row identifies the relevant *ligand*, not a receptor to cut down, so the default reads
+    # the assembly the model was trained on; --receptor-chains entry restores the old behaviour for comparison.
+    entry_only = args.get("receptor_chains") == "entry"
+    st = structure.read_pdb(path, chains or None) if (entry_only and chains) else structure.read_pdb(path)
     codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
     ligs = [l for l in structure.read_ligands(path, min_heavy=8, exclude=EXCLUDE if codes is None else set()) if (codes is None or l["comp"] in codes)]
-    if chains:
+    if chains and entry_only:
         ligs = [l for l in ligs if np.linalg.norm(st["xyz"][:, None] - l["xyz"][None], axis=2).min() <= 6.0] if len(st["xyz"]) else []
     if len(st["xyz"]) < 50 or not ligs:
         return dict(pdb=pdb, status="no_ligand" if len(st["xyz"]) >= 50 else "no_protein"), []
@@ -179,6 +190,9 @@ def main():
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
+    ap.add_argument("--receptor-chains", choices=["all", "entry"], default="all",
+                    help="all (default): the whole assembly, as the candidate table was built and as the external "
+                         "baselines are run; entry: only the chain the benchmark row names, which mismatches training")
     ap.add_argument("--point-model", default="", help="per-point ligandability booster; defaults to "
                     "models/point_native.txt and is only loaded when the ranker needs its columns")
     ap.add_argument("--esm-tag", default="native2", help="which esm_features_<tag> projection to use at inference")
@@ -196,7 +210,8 @@ def main():
         except Exception as ex:  # noqa: BLE001
             print(f"  RCSB metadata failed for a batch: {ex}")
     train_cl = {r["cluster30"] for r in csv.DictReader(open(REPO / "data/processed/manifest.csv"))} if (REPO / "data/processed/manifest.csv").exists() else set()
-    args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag, point_model=a.point_model)
+    args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag, point_model=a.point_model,
+                receptor_chains=a.receptor_chains)
     with ProcessPoolExecutor(a.jobs) as ex:
         res = list(ex.map(one, [(r, r.get("chain", ""), args) for r in rows], chunksize=2))
     summ = pd.DataFrame([s for s, _ in res]); cand = pd.DataFrame([c for _, cs in res for c in cs])
