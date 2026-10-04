@@ -196,7 +196,8 @@ def main():
     ap.add_argument("--ds", default=str(REPO / "data/processed")); ap.add_argument("--tag", default="native")
     ap.add_argument("--seeds", type=int, default=5); ap.add_argument("--ablate", action="store_true")
     ap.add_argument("--model", default="")
-    ap.add_argument("--features-extra", default="", help="comma-separated: net (network scores), esm (language-model features)")
+    ap.add_argument("--features-extra", default="", help="comma-separated: net (network scores), "
+                    "points (per-point ligandability aggregates), esm (language-model features)")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
@@ -222,6 +223,20 @@ def main():
     extras = [x for x in a.features_extra.split(",") if x]
     if "net" in extras:
         feats += [f for f in pf.NET_FEATURES if f in df]
+    if "points" in extras:                  # aggregates of the learned per-point ligandability score
+        pfile = ds / f"point_features_{a.tag}.csv.gz"
+        if not pfile.exists():
+            sys.exit(f"{pfile.name} missing: run scripts/train/build_points.py then train_point_model.py --tag {a.tag}")
+        pt = pd.read_csv(pfile).drop(columns=["fold"], errors="ignore")
+        before = len(df)
+        df = df.merge(pt, on=["pdb", "center"], how="left")
+        assert len(df) == before, "point features duplicated a candidate row"
+        cols = [c for c in pt.columns if c in pf.POINT_AGG]
+        missing = int(df[cols[0]].isna().sum()) if cols else 0
+        df[cols] = df[cols].fillna(0.0)
+        print(f"point features: {len(cols)} columns joined to {before} candidates ({missing} without a point score)")
+        feats += cols
+
     if "esm" in extras:                     # protein-language-model features per candidate, no network needed
         ef = ds / f"esm_features_{a.tag}.csv.gz"
         if not ef.exists():

@@ -56,8 +56,13 @@ NET_FEATURES = (["net_seg", "net_center_conf", "net_hot_mean", "net_n_centers", 
                 + [f"net_hot{j}_{s}_{r}" for r in (4, 8) for j in range(7) for s in ("mean", "max")])
 PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
+# Aggregates of the learned per-point ligandability score (equicave.point_score.POINT). Optional like the network
+# features: supplied only when a point model is given, so a ranker trained without them still runs.
+POINT_AGG = ["pts_sum", "pts_mean", "pts_max", "pts_p90", "pts_p50", "pts_top10_mean", "pts_sd",
+             "pts_n_30", "pts_n_50", "pts_n_70", "pts_f_30", "pts_f_50", "pts_f_70",
+             "pts_blob_max", "pts_blob_sum", "pts_n_points", "pts_centroid_shift", "pts_sum_per_point"]
 GROUPS = dict(native=NATIVE, geometry=GEOMETRY, chemistry=CHEMISTRY, shell=SHELL, potential=POTENTIAL,
-              context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE)
+              context=CONTEXT, network=NET_FEATURES, peptide=PEPTIDE, points=POINT_AGG)
 
 
 POT_SPEC = (("hbd", "acceptor"), ("hba", "donor"), ("hydrophobic", "hydrophobic"), ("aromatic", "aromatic"),
@@ -240,6 +245,9 @@ def check_features(model_features: list[str], produced: dict, model_path="") -> 
     language-model columns are exempt, since those are supplied by the caller only when a network or an embedding is
     available, and their absence is reported separately.
     """
+    # The point aggregates are deliberately NOT exempt: when a model was trained with them, serving it without a
+    # point model is the same silent-zeros failure this function exists to catch. They are produced whenever
+    # `rank_sites` is given a point model, so a correct call never reaches the error.
     optional = tuple(NET_FEATURES) + ("esm_",)
     missing = [f for f in model_features
                if f not in produced and not f.startswith(optional) and not f.endswith(("_z", "_m"))
@@ -249,19 +257,48 @@ def check_features(model_features: list[str], produced: dict, model_path="") -> 
             f"model {Path(model_path).name or model_path} needs {len(missing)} features this checkout does not "
             f"produce: {missing[:8]}{'...' if len(missing) > 8 else ''}. The feature definitions changed since it was "
             f"trained; retrain it (scripts/train/train_ranker.py) or check out the commit recorded in its "
-            f"geometry file.")
+            f"geometry file."
+            + (" The missing columns are the per-point ligandability aggregates: pass point_model= to rank_sites."
+               if any(f in POINT_AGG for f in missing) else ""))
 
 
-def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None = None) -> list[dict]:
+def point_aggregates(cands: list[dict], st: dict, point_model) -> list[dict]:
+    """Score every candidate's own cavity points with the per-point model and aggregate them per candidate.
+
+    The same computation the training-time table does, so a ranker that learned the `POINT_AGG` columns sees the
+    columns it was trained on. `point_model` is a LightGBM booster saved by scripts/train/train_point_model.py.
+    """
+    from . import labels as LB, point_score as ps
+    xyz = st["xyz"]; tp = cKDTree(xyz)
+    types = LB.protein_atom_types(st)
+    trees = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types.items()}
+    centroid = xyz.mean(0); rg = float(np.sqrt(((xyz - centroid) ** 2).sum(1).mean())) or 1.0
+    out = []
+    for c in cands:
+        pts = np.atleast_2d(np.asarray(c.get("points", []), float))
+        if not len(pts):
+            out.append({f: 0.0 for f in POINT_AGG}); continue
+        X = ps.point_features(pts, st, tp, trees, rg, centroid)
+        out.append(ps.aggregate(point_model.predict(X), pts, np.asarray(c["center"], float)))
+    return out
+
+
+def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None = None,
+               point_model=None) -> list[dict]:
     """Score candidates with the learned ranker; returns feature rows best-first with `ranker_score`.
 
     `extra`: optional per-candidate dicts with network features (`NET_FEATURES`), same order as `cands`.
+    `point_model`: optional per-point ligandability booster; when given, its candidate aggregates are computed here
+    rather than read from a table, so inference needs nothing precomputed.
     Within-structure z-score features, when the model was trained with them (`<model>.preprocess.json`), are
     recomputed here exactly as in training, so inference and training see the same columns.
     """
     booster, feats = load_ranker(model_path)
     check_geometry(model_path)
     rows = featurize(cands, st)
+    if point_model is not None and rows:
+        for r, agg in zip(rows, point_aggregates(cands, st, point_model)):
+            r.update(agg)
     if extra:
         for r, e in zip(rows, extra):
             r.update(e)
