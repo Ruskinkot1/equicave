@@ -27,10 +27,21 @@ set (all 1367 manifest structures to the 432 that share no 30 %-identity cluster
 236 columns fitted on 432 structures may simply be data-starved, in which case the cleaned-subset
 cross-validation is measuring a model that cannot be served.
 
-Until that is separated, **the cleaned-subset top-1 figures should not be read as benchmark performance.** The
-runs that separate them -- the same 272-column feature set trained on all 1367 structures, with and without the
-per-point group, evaluated on the same COACH420 subset -- are in progress; the comparable row there stays the
-structures that are not train-similar, which is leakage-free for a model trained on the full manifest.
+A silent serving bug is ruled out: the 118 features assembled at inference were compared against the stored
+training table for 180 candidates of six structures and agree exactly (maximum absolute difference 0 across every
+column), so the model is served the values it was trained on.
+
+The remaining candidate cause, besides training-set size, is in the protocol itself. The cleaned subset is not a
+random subsample: it is **selected** as the structures sharing no 30 %-identity cluster with any benchmark, so a
+cross-validation inside that pool trains and tests on families chosen for being unlike the benchmarks, and measures
+generalisation within an unusual pool rather than to a benchmark. If that is the explanation, then 0.806 was never a
+benchmark prediction and 0.637 is the honest out-of-family number -- and the protocol that gives both an honest and
+a usable figure is to train on the whole manifest and report the benchmark structures that are not train-similar,
+which is leakage-free because those structures are absent from training by construction.
+
+Until that is separated, **the cleaned-subset top-1 figures should not be read as benchmark performance.** The runs
+that separate them -- the same 272-column feature set trained on all 1367 structures, with and without the
+per-point group, evaluated on the same COACH420 subset -- are in progress.
 
 ## Negative results worth keeping
 
