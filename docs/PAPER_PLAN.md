@@ -21,7 +21,18 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
 4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
    with the property head.
-5. **Peptide-binder sites as a first-class problem**: a groove candidate tier with backbone-exposure features and a
+5. **A diagnosis of where pocket detection actually fails, and a per-point remedy for it.** On the COACH420
+   structures that are not similar to our training set, our candidate set contains the right answer for 0.992 of
+   them against P2Rank's 0.935, and we still lose top-N: we convert 72 % of our ceiling into a correct first
+   prediction where P2Rank converts 82 %. Three candidate explanations are measured and two are refuted --
+   prediction fragmentation cannot be it (210 of 283 structures have one site, where top-N is top-1 and merging
+   changes nothing, and that is where the deficit is largest), and mis-centring cannot be it (34 of 53 failing first
+   predictions are more than 8 A from the ligand, a different pocket rather than a near miss). What remains is how
+   a candidate is scored as a whole, and the remedy is a per-point ligandability model: out-of-fold AUROC 0.865 over
+   2.3 M cavity grid points, whose single best aggregate ranks candidates at 0.741 top-1 against the geometric
+   score's 0.473. A second-stage cascade over the top candidates, the other obvious remedy, is also measured and
+   also fails -- reported, because the negative results are part of the contribution.
+6. **Peptide-binder sites as a first-class problem**: a groove candidate tier with backbone-exposure features and a
    homology-controlled peptide-site benchmark built from RCSB (973 complexes, 685 receptor clusters, disjoint from the
    small-molecule training clusters). First result: cavity candidates already reach a high ceiling on peptide sites, so
    the limiting factor is ranking, not detection.
@@ -36,6 +47,7 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 | C5 | property classes and the hotspot field beat geometry-only and tabular baselines on held-out clusters | per-class AUROC/AP, ECE, enrichment of ligand atoms in top-k % points, permutation control | no gain |
 | C8 | interaction-validated hotspot labels train a better field than proximity labels | the same network trained on `y_hot` and on `y_hot_proximity`, both scored against the validated target | no difference |
 | C6 | peptide-specific features (groove shape + backbone exposure) improve peptide-site ranking | peptide benchmark, feature-group ablation | CI of the gain includes 0 |
+| C9 | the per-point ligandability aggregates raise the ranker beyond the 118 pocket features | the group added, feature-group ablation and paired cluster bootstrap on the cleaned subset, then COACH420 with and without it | CI includes 0 |
 | C7 | the model generalises across benchmarks | COACH420, HOLO4K, LIGYSIS, CryptoBench, held-out families, one protocol, train-similar structures separated | macro-average below the re-run baselines |
 
 ## Protocol requirements adopted from the 2026-10-04 survey
@@ -74,7 +86,8 @@ F7 failure cases. T1 data. T2 main metrics. T3 ablations. T4 peptide benchmark. 
 |---|---|
 | T1 data | done (1499 small-molecule entries / 1085 clusters; 973 peptide complexes / 685 receptor clusters; 12 held-out families verified against the deposited files) |
 | T2 main | partial: native candidates (ceiling 0.977) + ranker (top-1 0.724 with 32 features) + geometry baselines + P2Rank (top-1 0.754, ceiling 0.914) measured on the same 1392 structures; 109-feature ranker rebuilding; network **not trained** |
-| T3 ablations | ranker feature groups measured; network ablations need a GPU |
+| T3 ablations | ranker feature groups measured on the corrected 118-feature table (chemistry −0.039, shell −0.033, geometry and potential −0.021 each, native −0.006, context −0.001 top-1); network ablations need a GPU |
+| T6 negative results | done: prediction merging, re-centring (twice), the cascade re-ranker — each with the measurement that refutes it (`docs/results/README.md`) |
 | T4 peptide | 973 complexes built; candidate tiers measured on 400 of them (ceiling 0.952, groove tier alone 0.781, cavity tiers 0.939); ranker pending |
 | T5 licences | done (`docs/DATA_CARD.md`, `docs/PROVENANCE.md`) |
 
