@@ -1,0 +1,27 @@
+{
+ "model": "facebook/esm2_t12_35M_UR50D",
+ "radius": 8.0,
+ "dims": 8,
+ "features": [
+  "esm_n_res",
+  "esm_norm",
+  "esm_cos_protein",
+  "esm_mean0",
+  "esm_mean1",
+  "esm_mean2",
+  "esm_mean3",
+  "esm_mean4",
+  "esm_mean5",
+  "esm_mean6",
+  "esm_mean7",
+  "esm_max0",
+  "esm_max1",
+  "esm_max2",
+  "esm_max3",
+  "esm_max4",
+  "esm_max5",
+  "esm_max6",
+  "esm_max7"
+ ],
+ "n": 360
+}

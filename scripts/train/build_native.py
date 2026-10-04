@@ -10,6 +10,11 @@ The run is **restartable**: rows are flushed to `data/processed/<tag>_chunks/par
 structures already present in the chunks are skipped, so a run that is interrupted loses at most one chunk. The final
 table is the concatenation of the chunks (`--keep-chunks` to leave them on disk).
 
+With `--stream` the builder downloads each structure itself and **deletes it after featurising**, keeping only the
+feature rows. A full-PDB-scale run needs about 0.6 MB per structure on disk otherwise, which is tens of gigabytes;
+streaming keeps the footprint at a few files at a time, so the dataset size is limited by time rather than by disk.
+Structures that were already present before the run are never deleted.
+
 Usage: python scripts/train/build_native.py [--manifest data/processed/manifest.csv] [--jobs 4] [--limit N]
        [--min-buried 16] [--nms 6] [--tag native] [--chunk 50]
 Output: data/processed/candidates_<tag>.csv + .geometry.json, data/processed/structures_<tag>.csv (per-structure summary)
@@ -33,9 +38,32 @@ def n_sites(copies, link=8.0):
     return len(grp)
 
 
+def fetch_one(pdb: str, d: pathlib.Path, tries: int = 3):
+    """Download one structure if it is absent; returns (path, True) when this call created the file."""
+    import urllib.request
+    f = d / f"{pdb}.pdb"
+    if f.exists() and f.stat().st_size > 1000:
+        return f, False
+    d.mkdir(parents=True, exist_ok=True)
+    for t in range(tries):
+        try:
+            urllib.request.urlretrieve(f"https://files.rcsb.org/download/{pdb}.pdb", f)
+            if f.stat().st_size > 1000:
+                return f, True
+        except Exception:  # noqa: BLE001
+            time.sleep(1 + t)
+        f.unlink(missing_ok=True)
+    return None, False
+
+
 def one(task):
     pdb, path, lig_codes, meta, params = task
     t0 = time.time()
+    created = False
+    if params.get("stream"):
+        path, created = fetch_one(pdb, pathlib.Path(params["pdb_dir"]))
+        if path is None:
+            return [], dict(pdb=pdb, status="download_failed")
     try:
         st = structure.read_pdb(path)
         ligs = [l for l in structure.read_ligands(path, min_heavy=8) if l["comp"] in lig_codes]
@@ -58,6 +86,9 @@ def one(task):
                           hit=int(any(r["label"] for r in rows)), n_atoms=len(st["xyz"]), seconds=round(time.time() - t0, 1))
     except Exception as ex:  # noqa: BLE001
         return [], dict(pdb=pdb, status=f"error: {type(ex).__name__}: {ex}"[:200])
+    finally:
+        if created and params.get("stream"):           # keep the features, not the structure
+            pathlib.Path(path).unlink(missing_ok=True)
 
 
 def main():
@@ -74,16 +105,18 @@ def main():
     ap.add_argument("--tag", default="native")
     ap.add_argument("--chunk", type=int, default=50, help="flush to disk every N structures (0 = only at the end)")
     ap.add_argument("--keep-chunks", action="store_true")
+    ap.add_argument("--stream", action="store_true", help="download each structure and delete it after featurising")
     a = ap.parse_args()
     man = list(csv.DictReader(open(a.manifest)))
     if a.limit:
         man = man[:a.limit]
-    pdb_dir = pathlib.Path(a.pdb_dir)
-    params = dict(min_buried=a.min_buried, nms=a.nms, max_sites=a.max_sites, fill_min_buried=a.fill)
+    pdb_dir = pathlib.Path(a.pdb_dir); pdb_dir.mkdir(parents=True, exist_ok=True)
+    params = dict(min_buried=a.min_buried, nms=a.nms, max_sites=a.max_sites, fill_min_buried=a.fill,
+                  stream=a.stream, pdb_dir=str(pdb_dir))
     tasks = []
     for r in man:
         p = pdb_dir / f"{r['pdb']}.pdb"
-        if p.exists():
+        if p.exists() or a.stream:
             codes = {l[0] for l in json.loads(r["ligands"])}
             tasks.append((r["pdb"], p, codes, dict(cluster30=r["cluster30"], fold=int(r["fold"])), params))
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -103,7 +136,8 @@ def main():
     if done:
         print(f"resuming: {len(done)} structures already in {chunk_dir.name}", flush=True)
     tasks = [t for t in tasks if t[0] not in done]
-    print(f"{len(tasks)} structures to process ({len(man)} in the manifest)", flush=True)
+    print(f"{len(tasks)} structures to process ({len(man)} in the manifest)"
+          + (", streaming: each is downloaded and deleted after featurising" if a.stream else ""), flush=True)
     rows, summ, part, pending, pending_s = [], [], len(list(chunk_dir.glob("part_*.csv"))), [], []
 
     def flush():

@@ -102,7 +102,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ds", default=str(REPO / "data/processed")); ap.add_argument("--tag", default="native")
     ap.add_argument("--seeds", type=int, default=5); ap.add_argument("--ablate", action="store_true")
-    ap.add_argument("--model", default=""); ap.add_argument("--features-extra", default="", help="e.g. net: add NET_FEATURES present in the table")
+    ap.add_argument("--model", default="")
+    ap.add_argument("--features-extra", default="", help="comma-separated: net (network scores), esm (language-model features)")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     a = ap.parse_args()
@@ -110,8 +111,21 @@ def main():
     df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
     geo = json.loads((ds / f"candidates_{a.tag}.geometry.json").read_text())
     feats = list(pf.FEATURES) + ([f for f in pf.PEPTIDE if f in df] if a.tag == "peptide" else [])
-    if a.features_extra == "net":
+    extras = [x for x in a.features_extra.split(",") if x]
+    if "net" in extras:
         feats += [f for f in pf.NET_FEATURES if f in df]
+    if "esm" in extras:                     # protein-language-model features per candidate, no network needed
+        ef = ds / f"esm_features_{a.tag}.csv.gz"
+        if not ef.exists():
+            sys.exit(f"{ef.name} missing: run scripts/train/build_esm_features.py --tag {a.tag}")
+        e = pd.read_csv(ef).drop(columns=["fold"], errors="ignore")
+        before = len(df)
+        df = df.merge(e, on=["pdb", "center"], how="left")
+        esm_cols = [c for c in e.columns if c.startswith("esm_")]
+        df[esm_cols] = df[esm_cols].fillna(0.0)
+        missing = int(df[esm_cols[0]].eq(0.0).sum()) if esm_cols else 0
+        print(f"ESM features: {len(esm_cols)} columns joined to {before} candidates ({missing} without an embedding)")
+        feats += esm_cols
     feats = [f for f in dict.fromkeys(feats) if f in df]
     df = add_relevance(df, graded=not a.no_graded)
     base_feats = list(feats)

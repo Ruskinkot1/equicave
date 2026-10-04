@@ -3,6 +3,28 @@
 Small derived tables live in `data/processed/` (in git). Raw structures, ESM-2 caches, network feature caches and
 third-party databases are **never** committed (`.gitignore`); every one of them is rebuilt by a script in `scripts/`.
 
+## Dataset scale and what travels in git
+
+Raw PDB files are never committed: at full scale they are tens of gigabytes (0.61 MB per structure measured), and
+they belong to the RCSB PDB, which distributes them under CC0 far better than we could. What is committed is the
+**recipe**, which fully determines the data: the manifest (PDB id, 30 %-identity cluster, fold, ligand components),
+the geometry constants, and the commit. `scripts/data/export_dataset.py` packages that recipe (about 0.1 MB for 4000
+structures) and, with `--include-features`, the derived feature table, optionally sharded by fold so no single file
+is large. On the other side `--import` restores it and warns if the geometry constants of that checkout differ, which
+would silently change the features.
+
+`scripts/train/build_native.py --stream` downloads each structure and deletes it after featurising, so rebuilding at
+full-PDB scale costs time rather than disk.
+
+| manifest | entries | 30 % clusters | state |
+|---|---|---|---|
+| `manifest.csv` | 1499 (1367 usable) | 1017 | the measured results use this |
+| `manifest_big.csv` | 3965 | 2824 | built 2026-10-04; 2076 clusters new; candidates building |
+| `manifest_max.csv` | every matching RCSB entry (124 332 inspected, ≤ 3 per cluster) | expected > 10 000 | building |
+
+The RCSB query behind all three: X-ray, resolution ≤ 2.5 Å, protein-only polymers, ≤ 8 polymer instances, at least
+one non-polymer ligand of 150-900 Da that is not a solvent, buffer, ion, sugar or detergent.
+
 ## Tables in the repository
 | file | content | origin |
 |---|---|---|

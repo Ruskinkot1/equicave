@@ -1,0 +1,37 @@
+{
+ "created": "2026-10-04T11:51:32Z",
+ "commit": "5f2942d021b31c8601f122808f78bcf98c5d60d6",
+ "tag": "native2",
+ "geometry": {
+  "GRID": 1.0,
+  "CLASH": 3.0,
+  "RAY_LEN": 8.0,
+  "RAY_HIT": 2.0,
+  "RAY_STEP": 1.0,
+  "MIN_BURIED": 8,
+  "DETECT_MIN_BURIED": 16,
+  "NMS_RADIUS": 6.0,
+  "MIN_POINTS": 12,
+  "MAX_SITES": 30,
+  "FILL_MIN_BURIED": 10,
+  "CAV_R": 8.0,
+  "ENV_R": 8.0
+ },
+ "files": {
+  "manifest_big.csv": {
+   "bytes": 398379,
+   "sha256": "62bfdf27f55ed81e68e377143db74471d557c23fbfb935b0db94d7346bfd361a"
+  },
+  "heldout_targets.json": {
+   "bytes": 1465,
+   "sha256": "8dc845afe8e154f1d73870a56f19417e5ae6ed09f95265aa80175f552d99c60e"
+  }
+ },
+ "rebuild": [
+  "python scripts/data/fetch_structures.py --manifest data/processed/manifest_big.csv --jobs 8",
+  "python scripts/train/build_native.py --manifest data/processed/manifest_big.csv --jobs 8 --tag native2",
+  "# or, without the disk cost of keeping structures:",
+  "python scripts/train/build_native.py --manifest data/processed/manifest_big.csv --jobs 8 --stream --tag native2"
+ ],
+ "note": "Raw PDB files are not included: they are redistributed by the RCSB PDB (CC0) and the manifest names exactly which ones to fetch. The geometry constants must match or the features drift."
+}
