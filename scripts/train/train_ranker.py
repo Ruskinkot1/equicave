@@ -5,12 +5,26 @@ Protocol: 5-fold cross-validation by 30 %-identity cluster (manifest `fold`), se
 (an ensemble, which is what one would ship), baselines on exactly the same structures, 95 % bootstrap CI over
 clusters, and a paired cluster bootstrap of every gain against the detector order. Success: DCA <= 4 A.
 
-Three things beyond a plain LambdaRank fit, each switchable so its contribution can be measured:
+Seven things beyond a plain LambdaRank fit, each switchable so its contribution can be measured:
   --graded        relevance 2 for DCA <= 2 A, 1 for <= 4 A, 0 otherwise, instead of a binary label. Ranking a centre
                   that sits on the ligand above one that merely touches it is what top-1 actually rewards.
   --zscore        every feature is also given as a z-score within its own structure. Pocket ranking is a comparison
                   inside one protein, so "deeper than the other cavities of this protein" is the informative form.
   --ensemble      the final score is the mean over seeds (reported next to the per-seed mean).
+  --margins       besides the z-score of a feature, its margin: the value minus the best value among the *other*
+                  candidates of the same structure. A z-score says "unusual here", a margin says "better than the
+                  best alternative", which is what top-1 rewards; they are not the same number.
+  --objectives    one model per objective and their rank-average: LambdaRank (ordering), binary classification
+                  (is this candidate a site) and regression on -DCA (how close it is). The three disagree in
+                  different places, so averaging their within-structure ranks is usually better than any one.
+  --stack         a logistic regression over the out-of-fold predictions of those models, fitted per fold on the
+                  other folds, i.e. real stacking rather than a fixed average.
+  --search N      nested random search over N hyperparameter draws, selected on *inner* folds of the training part
+                  only, so the outer estimate stays honest.
+  --set-ranker    a permutation-equivariant set transformer (`equicave.set_ranker`) that scores all candidates of a
+                  structure jointly with a listwise loss. Gradient boosting scores each candidate alone and has to be
+                  told about the competition through hand-built z-scores and margins; the transformer learns the
+                  comparison, and it can consume raw embeddings that a tree model cannot use.
   calibration     a LambdaRank score is not a probability, so an isotonic regression maps it to P(the candidate hits a
                   ligand). It is fitted per fold on the *other* folds' out-of-fold scores, never on the fold it
                   scores, and the expected calibration error is reported before and after.
@@ -54,19 +68,98 @@ def add_zscores(df: pd.DataFrame, feats: list[str]) -> tuple[pd.DataFrame, list[
     return pd.concat([df, z.fillna(0.0)], axis=1), feats + list(z.columns)
 
 
-def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 400):
+def add_margins(df: pd.DataFrame, feats: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """Each feature minus the best value among the other candidates of the same structure.
+
+    For a structure with values x_1..x_n the margin of candidate i is x_i - max_{j != i} x_j, computed from the two
+    largest values per group so it costs one sort. A positive margin means "no other candidate here is better on
+    this feature", which is exactly the comparison top-1 scores.
+    """
+    out = {}
+    g = df.groupby("pdb", sort=False)
+    for c in feats:
+        top2 = g[c].transform(lambda v: v.nlargest(2).iloc[-1] if len(v) > 1 else v.iloc[0])
+        mx = g[c].transform("max")
+        best_other = np.where(df[c].to_numpy() >= mx.to_numpy(), top2.to_numpy(), mx.to_numpy())
+        out[f"{c}_m"] = df[c].to_numpy() - best_other
+    m = pd.DataFrame(out, index=df.index).fillna(0.0)
+    return pd.concat([df, m], axis=1), feats + list(m.columns)
+
+
+def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 400, objective: str = "lambdarank", params: dict | None = None):
+    """One model. `objective`: lambdarank (ordering), binary (is a site), regression (on -DCA)."""
     train = train.sort_values("pdb", kind="stable")
-    grp = train.groupby("pdb", sort=False).size().to_numpy()
-    y = train[TARGET] if TARGET in train else train["label"]
-    return lgb.train(dict(PARAMS, seed=seed), lgb.Dataset(train[feats], y, group=grp), num_boost_round=rounds)
+    base = dict(PARAMS, seed=seed, **(params or {}))
+    if objective == "lambdarank":
+        y = train[TARGET] if TARGET in train else train["label"]
+        ds = lgb.Dataset(train[feats], y, group=train.groupby("pdb", sort=False).size().to_numpy())
+    elif objective == "binary":
+        base = {k: v for k, v in base.items() if k not in ("metric", "eval_at", "lambdarank_truncation_level", "label_gain")}
+        base.update(objective="binary", metric="auc", is_unbalance=True)
+        ds = lgb.Dataset(train[feats], train["label"])
+    elif objective == "regression":
+        base = {k: v for k, v in base.items() if k not in ("metric", "eval_at", "lambdarank_truncation_level", "label_gain")}
+        base.update(objective="regression", metric="l2")
+        ds = lgb.Dataset(train[feats], -train["dca"].clip(upper=20.0))
+    else:
+        raise ValueError(objective)
+    return lgb.train(base, ds, num_boost_round=rounds)
 
 
-def cv_scores(df: pd.DataFrame, feats, seed: int) -> np.ndarray:
+def cv_scores(df: pd.DataFrame, feats, seed: int, objective: str = "lambdarank", params: dict | None = None,
+              rounds: int = 400) -> np.ndarray:
     s = np.full(len(df), np.nan)
     for k in sorted(df["fold"].unique()):
         tr = df["fold"] != k
-        s[~tr.to_numpy()] = fit(df[tr], feats, seed).predict(df.loc[~tr, feats])
+        s[~tr.to_numpy()] = fit(df[tr], feats, seed, rounds, objective, params).predict(df.loc[~tr, feats])
     return s
+
+
+def within_structure_rank(df: pd.DataFrame, score: np.ndarray) -> np.ndarray:
+    """Scores replaced by their rank inside each structure, scaled to [0, 1]: comparable across models."""
+    s = pd.Series(score, index=df.index)
+    r = s.groupby(df["pdb"]).rank(pct=True, method="average")
+    return r.to_numpy()
+
+
+def random_params(rng) -> dict:
+    return dict(learning_rate=float(rng.choice([0.03, 0.05, 0.08, 0.12])),
+                num_leaves=int(rng.choice([15, 31, 63, 127])),
+                min_data_in_leaf=int(rng.choice([5, 10, 20, 40])),
+                feature_fraction=float(rng.choice([0.5, 0.65, 0.8, 1.0])),
+                bagging_fraction=float(rng.choice([0.6, 0.8, 1.0])),
+                lambda_l2=float(rng.choice([0.5, 1.0, 5.0, 20.0])),
+                lambdarank_truncation_level=int(rng.choice([3, 5, 10, 20])))
+
+
+def nested_search(df: pd.DataFrame, feats, n_draws: int, seed: int = 0, rounds: int = 400):
+    """Random search selected on inner folds of the training part only; returns out-of-fold scores and the picks.
+
+    For each outer fold the training part is split by its own cluster folds, every draw is scored by top-1 on those
+    inner folds, and only the winner is refitted on the whole training part to score the outer fold. The outer
+    estimate therefore never sees a hyperparameter chosen with its own data.
+    """
+    rng = np.random.default_rng(seed)
+    draws = [random_params(rng) for _ in range(n_draws)]
+    out = np.full(len(df), np.nan)
+    picks = []
+    for k in sorted(df["fold"].unique()):
+        te = (df["fold"] == k).to_numpy()
+        tr = df[~te]
+        inner = sorted(tr["fold"].unique())
+        best, best_score = None, -1.0
+        for p in draws:
+            sc = np.full(len(tr), np.nan)
+            for j in inner[:3]:                        # three inner folds keep the search affordable
+                itr = (tr["fold"] != j).to_numpy()
+                sc[~itr] = fit(tr[itr], feats, seed, rounds, "lambdarank", p).predict(tr.loc[~itr, feats])
+            m = M.per_structure(tr.assign(_s=sc).dropna(subset=["_s"]), "_s")
+            v = float(m["top1"].mean())
+            if v > best_score:
+                best, best_score = p, v
+        picks.append(dict(fold=int(k), top1_inner=round(best_score, 4), **best))
+        out[te] = fit(tr, feats, seed, rounds, "lambdarank", best).predict(df.loc[te, feats])
+    return out, picks
 
 
 def evaluate(df: pd.DataFrame, score: np.ndarray) -> pd.DataFrame:
@@ -107,6 +200,13 @@ def main():
     ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
+    ap.add_argument("--margins", action="store_true", help="add per-structure margin features (value minus the best other)")
+    ap.add_argument("--objectives", action="store_true", help="also fit binary and regression objectives and rank-average")
+    ap.add_argument("--set-ranker", action="store_true", help="also fit the permutation-equivariant set transformer")
+    ap.add_argument("--set-dim", type=int, default=96); ap.add_argument("--set-layers", type=int, default=2)
+    ap.add_argument("--set-epochs", type=int, default=40)
+    ap.add_argument("--stack", action="store_true", help="logistic regression over the model ranks (real stacking)")
+    ap.add_argument("--search", type=int, default=0, help="nested random hyperparameter search of N draws")
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
     df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
@@ -149,6 +249,11 @@ def main():
                  "most buried first": df["buried_mean"].to_numpy(float)}
     for name, s in baselines.items():
         per_method[name] = [evaluate(df, s)]
+    if a.margins:
+        base_only = [f for f in base_feats if f in df]
+        df, feats = add_margins(df, base_only)
+        feats = list(dict.fromkeys(feats + [f for f in df.columns if f.endswith("_z")]))
+        print(f"margins added: {len(feats)} features")
     main_name = f"LightGBM LambdaRank ({len(feats)} features)"
     seed_scores = [cv_scores(df, feats, sd) for sd in range(a.seeds)]
     per_method[main_name] = [evaluate(df, s) for s in seed_scores]
@@ -157,6 +262,42 @@ def main():
     prob, calib = calibrate(df, ens)
     per_method[f"{main_name}, calibrated"] = [evaluate(df, prob)]
     print("calibration: " + json.dumps({k: round(v, 4) for k, v in calib.items()}))
+
+    extra_scores = {}
+    if a.objectives:
+        for obj in ("binary", "regression"):
+            sc = np.mean([cv_scores(df, feats, sd, obj) for sd in range(max(1, a.seeds // 2))], axis=0)
+            extra_scores[obj] = sc
+            per_method[f"LightGBM {obj}"] = [evaluate(df, sc)]
+        ranks = [within_structure_rank(df, s_) for s_ in [ens] + list(extra_scores.values())]
+        per_method["rank average of the three objectives"] = [evaluate(df, np.mean(ranks, axis=0))]
+    if a.set_ranker:
+        from equicave.set_ranker import SetRanker
+        sc = np.full(len(df), np.nan)
+        for k in sorted(df["fold"].unique()):
+            te = (df["fold"] == k).to_numpy(); tr = ~te
+            m = SetRanker(n_features=len(feats), dim=a.set_dim, layers=a.set_layers, epochs=a.set_epochs,
+                          seed=0).fit(df.loc[tr, feats].to_numpy(float), df.loc[tr, "pdb"].to_numpy(),
+                                      df.loc[tr, TARGET].to_numpy(float), df.loc[tr, "label"].to_numpy(float),
+                                      log=print)
+            sc[te] = m.predict(df.loc[te, feats].to_numpy(float), df.loc[te, "pdb"].to_numpy())
+        extra_scores["set"] = sc
+        per_method[f"set transformer (listwise, {a.set_layers} layers)"] = [evaluate(df, sc)]
+        per_method["set transformer + LambdaRank, rank average"] = [
+            evaluate(df, (within_structure_rank(df, sc) + within_structure_rank(df, ens)) / 2)]
+    if a.stack and extra_scores:
+        from sklearn.linear_model import LogisticRegression
+        cols = np.column_stack([within_structure_rank(df, s_) for s_ in [ens] + list(extra_scores.values())])
+        st_sc = np.full(len(df), np.nan)
+        for k in sorted(df["fold"].unique()):
+            te = (df["fold"] == k).to_numpy(); tr = ~te & np.isfinite(cols).all(1)
+            lr = LogisticRegression(max_iter=2000).fit(cols[tr], df.loc[tr, "label"])
+            st_sc[te] = lr.predict_proba(cols[te])[:, 1]
+        per_method["stacked (logistic regression over the model ranks)"] = [evaluate(df, st_sc)]
+    if a.search:
+        sc, picks = nested_search(df, feats, a.search)
+        per_method[f"LambdaRank, nested search over {a.search} draws"] = [evaluate(df, sc)]
+        print("hyperparameters chosen per fold: " + json.dumps(picks))
     if a.ablate:
         for g, cols in pf.GROUPS.items():
             drop = set(cols) | {f"{c}_z" for c in cols}
