@@ -231,6 +231,27 @@ def load_ranker(path):
     return booster, feats
 
 
+def check_features(model_features: list[str], produced: dict, model_path="") -> None:
+    """Fail loudly when a trained model asks for a feature this checkout no longer produces.
+
+    Feature definitions change (the interaction-potential group was redefined once because it was saturated), and a
+    model trained before such a change asks for columns that no longer exist. Filling them with zeros gives a
+    prediction that looks valid and is not: the model is reading a constant where it learned a signal. Network and
+    language-model columns are exempt, since those are supplied by the caller only when a network or an embedding is
+    available, and their absence is reported separately.
+    """
+    optional = tuple(NET_FEATURES) + ("esm_",)
+    missing = [f for f in model_features
+               if f not in produced and not f.startswith(optional) and not f.endswith(("_z", "_m"))
+               and f not in NET_FEATURES]
+    if missing:
+        raise RuntimeError(
+            f"model {Path(model_path).name or model_path} needs {len(missing)} features this checkout does not "
+            f"produce: {missing[:8]}{'...' if len(missing) > 8 else ''}. The feature definitions changed since it was "
+            f"trained; retrain it (scripts/train/train_ranker.py) or check out the commit recorded in its "
+            f"geometry file.")
+
+
 def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None = None) -> list[dict]:
     """Score candidates with the learned ranker; returns feature rows best-first with `ranker_score`.
 
@@ -246,6 +267,7 @@ def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None
             r.update(e)
     if not rows:
         return rows
+    check_features(feats, rows[0], model_path)
     pre = Path(str(model_path) + ".preprocess.json")
     if pre.exists():
         cfg = json.loads(pre.read_text())

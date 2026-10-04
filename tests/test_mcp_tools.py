@@ -32,3 +32,14 @@ def test_modes_and_predict_without_models(tmp_path):
     assert all(s["score"] >= t["score"] for s, t in zip(out["sites"], out["sites"][1:]))
     pep = predict.predict(p, mode="peptide", top_k=3)
     assert pep["n_candidates"] >= out["n_candidates"] - 1     # the groove tier adds candidates (or dedups to the same)
+
+
+def test_a_stale_model_fails_loudly_instead_of_reading_zeros():
+    """A model trained before a feature definition changed must not be served with zeros in place of its columns."""
+    import pytest
+    from equicave import pocket_features as pf
+    produced = {"nat_score": 1.0, "cav_volume": 2.0}
+    pf.check_features(["nat_score", "cav_volume"], produced)                      # all present: fine
+    pf.check_features(["nat_score", "net_seg", "esm_mean0", "cav_volume_z"], produced)  # optional columns: fine
+    with pytest.raises(RuntimeError, match="features this checkout does not produce"):
+        pf.check_features(["nat_score", "pot_n_hbd", "pot_n_hba"], produced)
