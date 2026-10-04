@@ -146,6 +146,7 @@ def one(task):
         out.append(dict(pdb=pdb, chain=chains, n_sites=ns, dca=d, dcc=min(dcc_per_site), site_idx=j,
                         label=int(d <= 4.0), label_dcc=int(min(dcc_per_site) <= 4.0),
                         label_dcc10=int(min(dcc_per_site) <= 10.0), label_dcc12=int(min(dcc_per_site) <= 12.0),
+                        center=";".join(f"{x:.2f}" for x in p["center"]),
                         **{k: v for k, v in p.items() if k != "center"}))
     return dict(pdb=pdb, status="ok", n_sites=ns, n_cands=len(preds)), out
 
@@ -156,6 +157,7 @@ def main():
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
     ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
+    ap.add_argument("--merge-radii", default="8,12", help="prediction-merging radii to report in addition to as-generated")
     ap.add_argument("--tag", default="", help="suffix for the output files, e.g. _all for the other ligand rule")
     a = ap.parse_args()
     rows = load_set(a.set, a.limit, a.ligand_rule)
@@ -185,7 +187,18 @@ def main():
         results[subset] = {}
         per_ref = None
         crits = dict(DCA="label", DCC4="label_dcc", DCC10="label_dcc10", DCC12="label_dcc12")
+        radii = [float(x) for x in a.merge_radii.split(",") if x.strip()]
         for m in methods:
+            for radius in radii:                       # the same ranking, merged, so prediction count is comparable
+                if radius <= 0 or "center" not in df:
+                    continue
+                sub = M.nms_by_score(df, m, radius)
+                st_m = M.summarize(M.per_structure(sub, m, label_col="label"))
+                st_m["mean_predictions"] = float(len(sub) / sub["pdb"].nunique())
+                st_m["merge_radius"] = radius
+                if "site_idx" in sub:
+                    st_m["redundancy_all"] = M.redundancy(sub, m, label_col="label")
+                results[subset][f"{m} (DCA, merged at {radius:.0f} A)"] = st_m
             for name, crit in crits.items():
                 if crit not in df:
                     continue
@@ -218,6 +231,8 @@ def main():
         for m, st in d.items():
             red = st.get("redundancy_all", {})
             rtxt = f"{red.get('fraction', float('nan')):.3f}" if red else "—"
+            if "mean_predictions" in st:
+                m = f"{m}, {st['mean_predictions']:.1f} predictions"
             lines.append(f"| {subset} | {m} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | "
                          f"{M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} | {rtxt} |")
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)

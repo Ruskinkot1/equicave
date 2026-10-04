@@ -87,6 +87,25 @@ def permutation_control(y: np.ndarray, s: np.ndarray, fn, n: int = 100, seed: in
     return float(obs), float((null >= obs).mean())
 
 
+def nms_by_score(df: pd.DataFrame, score_col: str, radius: float, center_col: str = "center") -> pd.DataFrame:
+    """Keep, per structure, the best-scoring prediction and then any prediction farther than `radius` from all kept.
+
+    A candidate generator proposes several sub-sites of one cavity; metrics that count predictions (top-1, top-N)
+    punish that, while the candidate ceiling rewards it. Merging *after* ranking separates the two effects, and the
+    radius becomes a reported choice instead of a hidden one.
+    """
+    keep = []
+    for _, g in df.groupby("pdb", sort=False):
+        g = g.sort_values(score_col, ascending=False, kind="stable")
+        chosen: list[np.ndarray] = []
+        for idx, r in g.iterrows():
+            c = r[center_col]
+            c = np.array([float(x) for x in str(c).split(";")]) if isinstance(c, str) else np.asarray(c, float)
+            if all(np.linalg.norm(c - k) > radius for k in chosen):
+                chosen.append(c); keep.append(idx)
+    return df.loc[keep]
+
+
 def redundancy(df: pd.DataFrame, score_col: str, site_col: str = "site_idx", label_col: str = "label",
                top: int | None = None) -> dict:
     """How many predictions point at a site another, better-ranked prediction already found.
