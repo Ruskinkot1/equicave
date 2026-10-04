@@ -115,6 +115,45 @@ def cv_scores(df: pd.DataFrame, feats, seed: int, objective: str = "lambdarank",
     return s
 
 
+def cascade_scores(df: pd.DataFrame, feats, first: np.ndarray, k: int, seed: int, rounds: int = 300) -> np.ndarray:
+    """A second stage that only ever sees the top `k` candidates of the first stage, and reorders those.
+
+    Measured on the COACH420 structures that are not similar to our training set: when the first-ranked candidate is
+    wrong, the right answer is the second-ranked one in 24 of 53 cases and within the first five in 41 of 53, while
+    96 % of those structures do have a correct candidate somewhere. The mistake is therefore a choice between a few
+    plausible pockets, not a failure to find the pocket -- and a model trained on all thirty candidates spends most
+    of its capacity separating obvious non-sites from sites, which is not that choice.
+
+    This stage is trained only on the restricted lists, where typically exactly one candidate is correct, so the
+    gradient is entirely about the discrimination that decides top-1. It also sees what the first stage thought: the
+    first-stage score, its rank in the structure and its margin to the best candidate.
+
+    Leakage: `first` must already be out of fold (every row scored by a model that did not see it), and this stage is
+    cross-validated on the same folds, so no candidate is reordered by a model that saw its structure. Returns a
+    score for every row -- the second stage's score for the candidates it reordered, shifted above the rest, and the
+    first stage's own ordering below them.
+    """
+    d = df.assign(_first=first)
+    r = d.groupby("pdb")["_first"].rank(ascending=False, method="first")
+    top = (r <= k).to_numpy()
+    best = d.groupby("pdb")["_first"].transform("max")
+    d["_first_rank"] = r / r.groupby(d["pdb"]).transform("max")
+    d["_first_margin"] = d["_first"] - best
+    sub = d[top].reset_index(drop=True)
+    sfeats = list(feats) + ["_first", "_first_rank", "_first_margin"]
+    s2 = cv_scores(sub, sfeats, seed, "lambdarank", rounds=rounds)
+    # the reordered candidates keep their places at the head of the list; everything below keeps the first ordering
+    out = np.empty(len(d))
+    lo, hi = np.nanmin(s2), np.nanmax(s2)
+    span = (hi - lo) or 1.0
+    out[top] = 1.0 + (s2 - lo) / span
+    rest = d.loc[~top, "_first"].to_numpy(float)
+    if len(rest):
+        rlo, rhi = rest.min(), rest.max()
+        out[~top] = (rest - rlo) / ((rhi - rlo) or 1.0)       # strictly below every reordered candidate
+    return out
+
+
 def within_structure_rank(df: pd.DataFrame, score: np.ndarray) -> np.ndarray:
     """Scores replaced by their rank inside each structure, scaled to [0, 1]: comparable across models."""
     s = pd.Series(score, index=df.index)
@@ -202,6 +241,8 @@ def main():
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
     ap.add_argument("--margins", action="store_true", help="add per-structure margin features (value minus the best other)")
+    ap.add_argument("--cascade", default="", help="comma-separated k: second-stage re-rankers over the top k "
+                    "candidates of the first stage, e.g. 3,5")
     ap.add_argument("--objectives", action="store_true", help="also fit binary and regression objectives and rank-average")
     ap.add_argument("--set-ranker", action="store_true", help="also fit the permutation-equivariant set transformer")
     ap.add_argument("--set-dim", type=int, default=96); ap.add_argument("--set-layers", type=int, default=2)
@@ -279,6 +320,10 @@ def main():
     print("calibration: " + json.dumps({k: round(v, 4) for k, v in calib.items()}))
 
     extra_scores = {}
+    for k in [int(x) for x in a.cascade.split(",") if x.strip()]:
+        sc = np.mean([cascade_scores(df, feats, ens, k, sd) for sd in range(max(1, a.seeds // 2))], axis=0)
+        extra_scores[f"cascade{k}"] = sc
+        per_method[f"cascade re-ranker over the top {k}"] = [evaluate(df, sc)]
     if a.objectives:
         for obj in ("binary", "regression"):
             sc = np.mean([cv_scores(df, feats, sd, obj) for sd in range(max(1, a.seeds // 2))], axis=0)
