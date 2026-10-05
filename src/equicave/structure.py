@@ -44,6 +44,8 @@ def read_pdb(path, chains: str | None = None, model: int = 1) -> dict:
             continue
         if not (tag.startswith("ATOM") or (tag.startswith("HETATM") and line[17:20].strip() in ("MSE", "SEC"))):
             continue
+        if len(line) < 54:          # too short to hold the coordinate columns: a truncated or malformed record
+            continue                # (one such line in a downloaded file used to abort the whole structure)
         if chains and line[21] not in chains:
             continue
         alt = line[16]

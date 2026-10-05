@@ -37,7 +37,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO)); sys.path.insert(0, str(REPO / "scripts/data"))
-from equicave import detect, labels as LB, metrics as M, pocket_features as pf, pockets as pk, structure, targets  # noqa: E402
+from equicave import detect, labels as LB, metrics as M, pocket_features as pf, pockets as pk, structure, superpose as SP, targets  # noqa: E402
 from build_manifest import EXCLUDE, info, groups  # noqa: E402
 
 EXT = REPO / "data/external/eval_sets"; RAW = REPO / "data/external/pdb"
@@ -51,6 +51,18 @@ def fetch(pdb):
         except Exception:  # noqa: BLE001
             return None
     return f if f.exists() and f.stat().st_size > 1000 else None
+
+
+def _holo_spec(row) -> dict:
+    """The apo/holo pairing a benchmark row carries in its note, or {} when the row is an ordinary holo entry."""
+    note = row.get("note", "") or ""
+    if "holo_pdb_id" not in note:
+        return {}
+    try:
+        d = json.loads(note[note.index("{"):note.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return d if d.get("holo_pdb_id") else {}
 
 
 def load_set(name, limit, ligand_rule="mlig"):
@@ -122,6 +134,15 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
 
 
 def one(task):
+    """One benchmark entry. Never raises: a single unreadable structure must not abort a 4000-structure run, so a
+    failure becomes a status row and shows up in the skipped counts of the report instead."""
+    try:
+        return _one(task)
+    except Exception as ex:                                     # noqa: BLE001
+        return dict(pdb=task[0]["pdb"], status=f"error: {type(ex).__name__}: {ex}"[:200]), []
+
+
+def _one(task):
     r, chains, args = task
     pdb = r["pdb"]; path = fetch(pdb)
     if path is None:
@@ -139,8 +160,25 @@ def one(task):
     entry_only = args.get("receptor_chains") == "entry"
     st = structure.read_pdb(path, chains or None) if (entry_only and chains) else structure.read_pdb(path)
     codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
-    ligs = [l for l in structure.read_ligands(path, min_heavy=8, exclude=EXCLUDE if codes is None else set()) if (codes is None or l["comp"] in codes)]
-    if chains and entry_only:
+    # Apo/holo benchmarks (CryptoBench): the entry names an apo structure, where the point of the benchmark is that
+    # the pocket is closed and no ligand is bound, and a separate holo structure that actually holds the ligand.
+    # Prediction happens on the apo form and the label has to be carried over by superposition. Without this the
+    # evaluation found no ligand in the apo file and silently skipped the entry: 222 of 228 published test entries.
+    holo = _holo_spec(r)
+    if holo:
+        hpath = fetch(holo["holo_pdb_id"])
+        if hpath is None:
+            return dict(pdb=pdb, status="no_holo_pdb"), []
+        tr = SP.align_chains(path, hpath, holo.get("apo_chain", ""), holo.get("holo_chain", ""))
+        if not tr.get("ok"):
+            return dict(pdb=pdb, status=f"holo alignment failed: {tr.get('reason', '')}"[:120]), []
+        ligs = SP.transfer_ligands(hpath, tr, codes)
+        st = structure.read_pdb(path)                         # the apo receptor, every chain
+        if not ligs:
+            return dict(pdb=pdb, status="no_ligand_in_holo", holo=holo["holo_pdb_id"]), []
+    else:
+        ligs = [l for l in structure.read_ligands(path, min_heavy=8, exclude=EXCLUDE if codes is None else set()) if (codes is None or l["comp"] in codes)]
+    if chains and entry_only and not holo:
         ligs = [l for l in ligs if np.linalg.norm(st["xyz"][:, None] - l["xyz"][None], axis=2).min() <= 6.0] if len(st["xyz"]) else []
     if len(st["xyz"]) < 50 or not ligs:
         return dict(pdb=pdb, status="no_ligand" if len(st["xyz"]) >= 50 else "no_protein"), []
