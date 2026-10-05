@@ -115,14 +115,17 @@ def main():
                       f"{sum(x['n_pos'] for x in ok) / max(1, sum(x['n_points'] for x in ok)):.3f} positive", flush=True)
     if buf:
         pd.DataFrame(buf).to_csv(chunks / f"part_{part:04d}.csv", index=False)
-    df = pd.concat([pd.read_csv(f) for f in sorted(chunks.glob("part_*.csv"))], ignore_index=True)
-    tables.write_table(df, out, f"points_{a.tag}")
+    # Written part by part: the largest manifest yields about twenty million rows, and concatenating those into one
+    # DataFrame costs several gigabytes and would fail after hours of work on a modest machine.
+    _, n_rows = tables.write_table_from_parts(sorted(chunks.glob("part_*.csv")), out, f"points_{a.tag}")
     pd.DataFrame(summ).to_csv(out / f"point_build_{a.tag}.csv", index=False)
-    pos = df["occ"].mean() if len(df) else float("nan")
-    print(f"{len(df)} points from {df['pdb'].nunique()} structures, {pos:.4f} positive -> points_{a.tag}.csv.gz")
+    ok = [x for x in summ if x["status"] == "ok"]
+    n_pos = sum(x.get("n_pos", 0) for x in ok)
+    pos = n_pos / n_rows if n_rows else float("nan")
+    print(f"{n_rows} points from {len(ok)} structures, {pos:.4f} positive -> points_{a.tag}.csv.gz")
     (out / f"points_{a.tag}.meta.json").write_text(json.dumps(
         dict(occ_radius=a.occ_radius, points_per_candidate=a.points_per_candidate, seed=a.seed,
-             features=list(ps.POINT_FEATURES), n_points=int(len(df)), positive_fraction=float(pos)), indent=1))
+             features=list(ps.POINT_FEATURES), n_points=int(n_rows), positive_fraction=float(pos)), indent=1))
     if not a.keep_chunks:
         for f in chunks.glob("part_*.csv"):
             f.unlink()

@@ -43,7 +43,9 @@ def main():
     ap.add_argument("--models", default=str(REPO / "models")); ap.add_argument("--out", default=str(REPO / "docs/results"))
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
-    df = tables.read_table(ds, f"points_{a.tag}")
+    # float32 on read, not after: at the largest scale the float64 frame alone is over six gigabytes.
+    df = tables.read_table(ds, f"points_{a.tag}",
+                           dtype={f: "float32" for f in ps.POINT_FEATURES} | {"occ": "int8", "fold": "int16"})
     feats = [f for f in ps.POINT_FEATURES if f in df]
     if len(feats) != len(ps.POINT_FEATURES):
         sys.exit(f"points_{a.tag} has {len(feats)} of {len(ps.POINT_FEATURES)} point features; rebuild it")

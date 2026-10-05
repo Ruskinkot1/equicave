@@ -33,3 +33,25 @@ def write_table(df: pd.DataFrame, ds, name: str, compressed: bool = True) -> Pat
     p.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(p, index=False)
     return p
+
+
+def write_table_from_parts(parts, ds, name: str, compressed: bool = True, dtype=None) -> tuple[Path, int]:
+    """Write one table from an iterable of CSV part files without holding them all in memory at once.
+
+    The per-point table is about 1700 rows per structure, so the largest manifest produces close to twenty million
+    rows; concatenating those into a single DataFrame costs several gigabytes and would fail on a modest machine
+    after hours of work. Each part is read, appended and released, so peak memory is one part. Returns the path and
+    the total row count.
+    """
+    p = table_path(ds, name, compressed)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    total, first = 0, True
+    for f in parts:
+        chunk = pd.read_csv(f, dtype=dtype)
+        if not len(chunk):
+            continue
+        chunk.to_csv(p, index=False, header=first, mode="w" if first else "a",
+                     compression="gzip" if compressed else None)
+        total += len(chunk); first = False
+        del chunk
+    return p, total

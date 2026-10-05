@@ -241,6 +241,9 @@ def main():
     ap.add_argument("--no-graded", action="store_true"); ap.add_argument("--no-zscore", action="store_true")
     ap.add_argument("--restrict-to", default="", help="a manifest whose structures are the only ones used (e.g. the cleaned one)")
     ap.add_argument("--margins", action="store_true", help="add per-structure margin features (value minus the best other)")
+    ap.add_argument("--net-tag", default="full", help="which net_features_<tag> table to join for "
+                    "--features-extra net; the out-of-fold run names it after the config's `tag`, which is 'full' "
+                    "for the default arm")
     ap.add_argument("--points-tag", default="", help="which point_features_<tag> table to join; defaults to --tag. "
                     "The detector is deterministic, so a point table built for one candidate tag joins any other "
                     "table of the same manifest on (pdb, center)")
@@ -266,7 +269,28 @@ def main():
     feats = list(pf.FEATURES) + ([f for f in pf.PEPTIDE if f in df] if a.tag == "peptide" else [])
     extras = [x for x in a.features_extra.split(",") if x]
     if "net" in extras:
-        feats += [f for f in pf.NET_FEATURES if f in df]
+        # The out-of-fold network run writes its candidate features to their own table, keyed by (pdb, center) --
+        # it does not put them into the candidate table. Reading only the columns already present therefore picked
+        # up nothing and trained a "hybrid" model identical to the plain one, silently: the exact failure mode the
+        # stale-feature guard exists for, one step earlier in the pipeline.
+        have = [f for f in pf.NET_FEATURES if f in df]
+        if not have:
+            nfile = next((ds / f"net_features_{t}{ext}" for t in (a.net_tag, a.tag) for ext in (".csv", ".csv.gz")
+                          if (ds / f"net_features_{t}{ext}").exists()), None)
+            if nfile is None:
+                sys.exit(f"--features-extra net needs net_features_{a.net_tag}.csv in {ds}: run the network's "
+                         f"out-of-fold mode first (python -m training pockets-net --set mode=oof), or drop 'net' "
+                         f"from --features-extra. Refusing to train a hybrid model with no network features.")
+            n = pd.read_csv(nfile).drop(columns=["fold"], errors="ignore")
+            before = len(df)
+            df = df.merge(n, on=["pdb", "center"], how="left")
+            assert len(df) == before, "the network feature table duplicated a candidate row"
+            have = [c for c in n.columns if c in pf.NET_FEATURES]
+            missing = int(df[have[0]].isna().sum()) if have else 0
+            df[have] = df[have].fillna(0.0)
+            print(f"network features: {len(have)} columns from {nfile.name} joined to {before} candidates "
+                  f"({missing} candidates without a network score)")
+        feats += have
     if "points" in extras:                  # aggregates of the learned per-point ligandability score
         pfile = ds / f"point_features_{a.points_tag or a.tag}.csv.gz"
         if not pfile.exists():
