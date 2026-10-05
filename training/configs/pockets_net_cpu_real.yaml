@@ -1,0 +1,73 @@
+# A real CPU training run, not a smoke test: it trains to convergence with early stopping and reports metrics.
+#
+# It is NOT the publishable configuration. Width, depth, probe count and graph density are all reduced so the run
+# finishes in hours instead of months: the full config (dim 128, layers 5, recycles 2, 1367 structures, 60 epochs)
+# measures at about 100 s per structure on four CPU cores, which is roughly 2300 hours for one seed on one fold.
+# Numbers from this file are a converged pilot on a subset at reduced capacity; they say whether the mechanisms
+# train and roughly where they land, not what the architecture is worth. Use training/configs/pockets_net.yaml on a
+# GPU for anything that goes in the paper (see GPU_EXPERIMENTS.md).
+data:
+  manifest: data/processed/manifest.csv
+  pdb_dir: data/pockets_ds/pdb
+  cache_dir: data/cache/net_real
+  esm: facebook/esm2_t12_35M_UR50D     # 35M, not 650M: the 650M model is itself hours of CPU per pass
+  n_probe: 256
+  n_surf: 128
+  k_scale: 0.6                         # thinner graph; a pilot compromise, recorded because it changes the receptive field
+  limit: 400
+  require_interaction: true
+  druglike_only: false
+  probe_potential: true
+  residue_chemistry: true
+split:
+  val_fold: 0
+model:
+  backbone: cartesian
+  lmax: 2
+  recycles: 1
+  dim: 48
+  layers: 3
+  heads: 4
+  n_rbf: 24
+  cutoff: 10.0
+  equivariant: true
+  invariant_mode: frames
+  use_vectors: true
+  use_tensors: true
+  chiral: true
+  use_surface: true
+  use_probes: true
+  dropout: 0.05
+loss:
+  hungarian: true
+  mask_frac: 0.15
+  pot_mask_frac: 0.2
+  w_potential: 0.3
+  recycle_weight: 0.5
+  w_seq: 0.3
+  w_size: 0.1
+  w_res: 1.0
+  w_occ: 1.0
+  w_center: 0.5
+  w_conf: 0.5
+  w_hot: 1.0
+  w_prop: 0.5
+  w_dir: 0.5
+  w_listwise: 0.3
+  occ_pos_weight: 3.0
+  res_pos_weight: 3.0
+stages:
+  enabled: true
+  warmup_epochs: 6
+  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop]
+optim:
+  lr: 0.001
+  weight_decay: 0.01
+  epochs: 40
+  accumulate: 4
+  warmup_epochs: 1
+  ema: 0.995
+  patience: 8
+  seed: 0
+  rotate: true
+  amp: none

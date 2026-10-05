@@ -281,7 +281,23 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     stage1 = int(st.get("warmup_epochs", 0)) if st.get("enabled") else 0
     if stage1:
         log(f"staged training: epochs 1-{stage1} with {','.join(st.get('stage1_zero', []))} at zero, then all terms")
-    for ep in range(E):
+
+    # Resume. A multi-hour run that dies -- a restarted container, a pre-empted node, a full disk -- otherwise loses
+    # every epoch, and this trainer is meant to be driven unattended. The checkpoint is written after each epoch and
+    # holds everything the loop needs to continue identically: weights, the EMA shadow, the optimiser and schedule
+    # state, the RNG stream that decides the structure order and the masks, and the early-stopping counters.
+    ck_path = out_dir / "checkpoint.pt"
+    start_ep = 0
+    if ck_path.exists():
+        ck = torch.load(ck_path, map_location=device, weights_only=False)
+        model.load_state_dict(ck["model"]); ema.shadow.load_state_dict(ck["ema"])
+        opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"])
+        rng.bit_generator.state = ck["rng"]
+        best, bad, history, start_ep = ck["best"], ck["bad"], ck["history"], ck["epoch"]
+        best_state = ck.get("best_state")
+        log(f"resumed from {ck_path.name} at epoch {start_ep + 1}/{E}, best val score {best:.4f}")
+
+    for ep in range(start_ep, E):
         # P6: stage 1 converges the dense per-node heads before the sparse ranking terms are switched on, so the
         # sparse gradients do not fight a dense signal through an untrained trunk. A schedule, not a parameter.
         lw = dict(cfg["loss"])
@@ -312,9 +328,15 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
                             n_edge_scalar=mc.get("n_edge_scalar", 0), n_init_vec=mc.get("n_init_vec", 3)), out_dir / "model.pt")
         else:
             bad += 1
-            if bad >= cfg["optim"]["patience"]:
-                log("early stop"); break
-    ema.shadow.load_state_dict(best_state)
+        torch.save(dict(model=model.state_dict(), ema=ema.shadow.state_dict(), opt=opt.state_dict(),
+                        sched=sched.state_dict(), rng=rng.bit_generator.state, best=best, bad=bad,
+                        history=history, epoch=ep + 1, best_state=best_state), ck_path)
+        if bad >= cfg["optim"]["patience"]:
+            log("early stop"); break
+    if best_state is not None:
+        ema.shadow.load_state_dict(best_state)
+    else:
+        log("no epoch improved on the initial score; returning the EMA weights as they stand")
     (out_dir / "history.json").write_text(json.dumps(history, indent=1))
     return dict(model=ema.shadow, best=best, history=history, in_dims=in_dims)
 
