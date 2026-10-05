@@ -38,7 +38,10 @@ MODEL_DEFAULT = "train_full"       # GrASP's model trained on its full training 
 def grasp_predict(repo: pathlib.Path, pdb_paths: list, model: str, threshold: float, jobs: int, log=print) -> dict:
     """Run GrASP's own pipeline on a batch and return {pdb_id: [(center, score), ...]} best first."""
     work = repo / "benchmark_data_dir" / "production"
+    # Both sides are cleared, not just the inputs: GrASP writes its scores under test_metrics/production and keeps
+    # them, so a later batch would find a previous batch's prediction whose mol2 has been deleted and fail on it.
     shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(repo / "test_metrics" / "production", ignore_errors=True)
     (work / "unprocessed_inputs").mkdir(parents=True)
     for p in pdb_paths:
         shutil.copy(p, work / "unprocessed_inputs" / pathlib.Path(p).name)
@@ -54,7 +57,7 @@ def grasp_predict(repo: pathlib.Path, pdb_paths: list, model: str, threshold: fl
     import site_metrics as SM
 
     out = {}
-    probs_root = work.parent.parent / "test_metrics" / "production" / "probs"
+    probs_root = repo / "test_metrics" / "production" / "probs"
     model_dirs = sorted(d for d in probs_root.glob(f"{model}/*/*/*") if d.is_dir())
     if not model_dirs:
         raise RuntimeError(f"no GrASP predictions under {probs_root / model}")
