@@ -87,6 +87,28 @@ def grasp_predict(repo: pathlib.Path, pdb_paths: list, model: str, threshold: fl
     return out
 
 
+def predict_bisect(repo, paths, model, threshold, jobs, log=print) -> dict:
+    """GrASP on a batch, halving it on failure so one bad structure costs a retry and not the whole batch.
+
+    Their parse step runs joblib across every core and a single pathological structure kills the whole Parallel call.
+    Isolating every structure would be correct but costs a process start-up each -- measured at about 70 s per
+    structure, since torch, PyTorch Geometric and MDAnalysis are imported twice per invocation. Halving on failure
+    keeps batch speed where structures are fine and narrows down to the single offender where they are not, at a
+    cost logarithmic rather than linear in the batch size.
+    """
+    try:
+        return grasp_predict(repo, paths, model, threshold, jobs, log=lambda _m: None)
+    except RuntimeError as ex:
+        if len(paths) == 1:
+            log(f"  {pathlib.Path(paths[0]).stem}: GrASP failed, skipped ({str(ex).splitlines()[0][:80]})")
+            return {}
+        mid = len(paths) // 2
+        log(f"  a batch of {len(paths)} failed; halving")
+        out = predict_bisect(repo, paths[:mid], model, threshold, jobs, log)
+        out.update(predict_bisect(repo, paths[mid:], model, threshold, jobs, log))
+        return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True)
@@ -99,7 +121,7 @@ def main():
     # pathological structure takes the whole Parallel call down with it, so a larger batch loses every
     # structure in it: measured on COACH420, batches of 40 lost 220 of 300 that way. Per-structure isolation
     # costs a few seconds of start-up each and loses only the structure that actually fails.
-    ap.add_argument("--batch", type=int, default=1); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--batch", type=int, default=24); ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
     if not a.repo:
@@ -120,10 +142,7 @@ def main():
                 paths.append(p); keep.append(r)
         if not paths:
             continue
-        try:
-            pred = grasp_predict(repo, paths, a.model, a.threshold, a.jobs)
-        except RuntimeError as ex:
-            print(f"  batch {i // a.batch}: {ex}"); continue
+        pred = predict_bisect(repo, paths, a.model, a.threshold, a.jobs)
         for r, path in zip(keep, paths):
             sites = pred.get(r["pdb"], [])
             codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
