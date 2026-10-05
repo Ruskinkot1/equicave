@@ -164,7 +164,7 @@ bash scripts/train/train_all.sh         # the whole pipeline; GPU stages are ski
 | `ranker` | LambdaRank, cluster CV, 5 seeds, ablations | CPU, minutes |
 | `peptide` | peptide benchmark, groove candidates, peptide ranker | CPU |
 | `labels` | property and hotspot label statistics | CPU |
-| `net` | EquiCave-Net, fold 0, 3 seeds | **GPU** |
+| `net` | EquiCave-Net, fold 0, 3 seeds — see [`GPU_EXPERIMENTS.md`](GPU_EXPERIMENTS.md) | **GPU** |
 | `net-oof` | out-of-fold network features | **GPU** |
 | `hybrid` | ranker with the network's scores | CPU |
 | `ablations` | full / no_probes / no_surface / no_esm / no_tensors / invariant / achiral | **GPU** |

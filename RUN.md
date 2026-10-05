@@ -1,5 +1,9 @@
 # How to run EquiCave
 
+> **Training the network on a GPU: see [`GPU_EXPERIMENTS.md`](GPU_EXPERIMENTS.md).** It has the ordered experiment
+> plan, the gate that stops a wasted week, and the two rules for reading the numbers (the candidate ceiling is
+> already 0.989, and cross-validated top-1 does not predict benchmark top-1).
+
 For a student or collaborator starting from a fresh clone. Every command is copy-paste; nothing needs editing.
 If a step fails, the error is the deliverable: send it along with the log, do not work around it silently.
 

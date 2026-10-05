@@ -5,7 +5,7 @@ ablations:
   no_surface: {model.use_surface: false}
   no_esm: {data.esm: null}
   no_tensors: {model.use_tensors: false}            # degree <= 1 (vector channels only)
-  no_vectors: {model.use_vectors: false}            # degree 0 only but still gated by edge directions? no: distances only
+  no_vectors: {model.use_vectors: false, model.invariant_mode: frames}   # no steerable channels, geometry in local frames
   invariant_frames: {model.equivariant: false, model.invariant_mode: frames}   # fair: same geometry, scalarised in a local frame
   invariant_blind: {model.equivariant: false, model.invariant_mode: distances}  # the usual confound: geometry removed as well
   achiral: {model.chiral: false}
@@ -15,5 +15,15 @@ ablations:
   nearest_probe_loss: {loss.hungarian: false}
   no_residue_chemistry: {data.residue_chemistry: false}
   no_probe_potential: {data.probe_potential: false, loss.w_potential: 0.0, loss.pot_mask_frac: 0.0}
+  # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
+  # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
+  # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.
+  no_tensors_matched: {model.use_tensors: false, model.match_params: full}
+  no_vectors_matched: {model.use_vectors: false, model.invariant_mode: frames, model.match_params: full}
+  # New mechanisms, each as a removal from the full model so the baseline is the one that ships.
+  no_direction_loss: {loss.w_dir: 0.0}              # P12: the dense cosine target on every probe near one site
+  no_listwise: {loss.w_listwise: 0.0}               # P2: the only term that orders probes within a structure
+  single_stage: {stages.enabled: false}             # P6: all terms on from epoch 1, the previous schedule
+  e3nn_l1: {model.backbone: e3nn, model.lmax: 1}    # with l2 and l3 below this is a real degree sweep
   e3nn_l2: {model.backbone: e3nn, model.lmax: 2}
   e3nn_l3: {model.backbone: e3nn, model.lmax: 3}

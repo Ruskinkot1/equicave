@@ -209,8 +209,35 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
                        y_prop=np.stack([LB.site_properties([ligs[i] for i in s], entries, xyz) for s in sites]).astype(np.float32),
                        site_n_atoms=np.array([sum(len(ligs[i]["xyz"]) for i in s) for s in sites], np.float32),
                        site_probe_mask=np.stack([(cKDTree(np.vstack([ligs[i]["xyz"] for i in s])).query(ppos)[0] <= 8.0) for s in sites]).astype(np.float32),
+                       **_probe_directions(ppos, ligs, sites),
                        lig_xyz=L.astype(np.float32), lig_cls=np.vstack([LB.ligand_atom_classes(l, entries.get(l["comp"])) for l in ligs]).astype(np.float32))
     return out
+
+
+def _probe_directions(ppos: np.ndarray, ligs: list, sites: list, reach: float = 8.0) -> dict:
+    """Unit vector from each probe to the nearest ligand heavy atom of its site, and the mask of usable probes.
+
+    A probe is usable when exactly one site is within `reach`: with two sites in range the target direction is
+    ambiguous and the probe is dropped rather than supervised towards an arbitrary one. This is the dense geometric
+    target of P12 -- the centre set loss reaches one proposal per site, this reaches every probe near a site.
+    """
+    per_site = [cKDTree(np.vstack([ligs[i]["xyz"] for i in s])) for s in sites]
+    d = np.stack([t.query(ppos)[0] for t in per_site])                       # [S, P]
+    near = d <= reach
+    usable = near.sum(0) == 1
+    which = np.argmax(near, 0)
+    direction = np.zeros((len(ppos), 3), np.float32)
+    for si, tree in enumerate(per_site):
+        rows = np.flatnonzero(usable & (which == si))
+        if not len(rows):
+            continue
+        target = tree.data[tree.query(ppos[rows])[1]]
+        v = target - ppos[rows]
+        n = np.linalg.norm(v, axis=1, keepdims=True)
+        ok = n[:, 0] > 1e-6
+        direction[rows[ok]] = (v[ok] / n[ok]).astype(np.float32)
+        usable[rows[~ok]] = False                       # a probe sitting on a ligand atom has no direction
+    return dict(probe_dir=direction, probe_dir_mask=usable.astype(np.float32))
 
 
 def save(d: dict, path: Path) -> None:
@@ -232,7 +259,8 @@ def to_torch(d: dict, device="cpu"):
             b[k] = torch.as_tensor(np.asarray(d[k]), device=device)
     b["slices"] = dict(res=torch.arange(n_res, device=device), probe=torch.arange(n_res, n_res + n_probe, device=device),
                        surf=torch.arange(n_res + n_probe, len(d["pos"]), device=device))
-    for k in ("y_res", "y_occ", "y_hot", "y_hot_proximity", "site_centers", "y_prop", "site_probe_mask", "site_n_atoms"):
+    for k in ("y_res", "y_occ", "y_hot", "y_hot_proximity", "site_centers", "y_prop", "site_probe_mask", "site_n_atoms",
+              "probe_dir", "probe_dir_mask"):
         if k in d:
             b[k] = torch.as_tensor(np.asarray(d[k]), device=device, dtype=torch.float32)
     if "res_type" in b:
@@ -297,6 +325,8 @@ def random_rotation(b: dict, rng: np.random.Generator):
     b["vec0"] = torch.einsum("nkc,dc->nkd", b["vec0"], R)
     if "site_centers" in b:
         b["site_centers"] = (b["site_centers"] - c) @ R.T
+    if "probe_dir" in b:            # a direction, so it rotates but is not translated; forgetting this silently
+        b["probe_dir"] = b["probe_dir"] @ R.T          # destroys the direction loss, hence test_probe_directions_rotate
     return b
 
 

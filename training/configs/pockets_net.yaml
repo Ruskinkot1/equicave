@@ -42,9 +42,18 @@ loss:
   w_center: 0.5
   w_conf: 0.5
   w_hot: 1.0
+  w_dir: 0.5                 # P12 cosine loss to the nearest ligand atom, on every probe near exactly one site
+  w_listwise: 0.3            # P2 listwise ordering of probes inside one structure
   w_prop: 0.5
   occ_pos_weight: 3.0
   res_pos_weight: 3.0
+stages:
+  # P6 staged training. Stage 1 converges the dense per-node heads with the sparse ranking terms switched off, then
+  # stage 2 turns them on; the sparse terms otherwise compete with a dense signal from epoch 1 against an untrained
+  # trunk. Zero parameter and zero time cost. Set `enabled: false` for the single-stage comparison arm.
+  enabled: true
+  warmup_epochs: 20          # epochs of stage 1 (dense only); the rest of `optim.epochs` is stage 2
+  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop]
 optim:
   lr: 0.0005
   weight_decay: 0.01

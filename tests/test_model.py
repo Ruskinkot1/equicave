@@ -184,3 +184,116 @@ def test_local_frame_scalars_are_rotation_invariant():
     assert torch.allclose(a, b, atol=1e-4), "frame coordinates must not change when the whole structure rotates"
     deg = v.clone(); deg[:, 1] = 0.0                                  # degenerate frame: documented fallback
     assert torch.isfinite(net.local_frame_scalars(deg)).all()
+
+
+def _symmetric_neighbourhood(kind: str, radius: float = 4.0):
+    """Six neighbours of one central probe, as an octahedron or as a planar hexagon of the same radius.
+
+    Both configurations have the same multiset of distances to the centre, the same multiset of pairwise distances
+    up to the pairs' labelling, and `sum(u) == 0`, so every degree-0 invariant and every degree-1 aggregate is
+    identical. They differ only in the traceless second moment: `sum(u u^T) / 6` is `I / 3` for the octahedron and
+    has a zero eigenvalue along the hexagon's normal. A model whose messages stop at degree 1 therefore cannot tell
+    them apart; degree-2 channels can.
+    """
+    if kind == "octahedron":
+        u = torch.tensor([[1.0, 0, 0], [-1.0, 0, 0], [0, 1.0, 0], [0, -1.0, 0], [0, 0, 1.0], [0, 0, -1.0]])
+    else:
+        a = torch.arange(6, dtype=torch.float32) * (torch.pi / 3)
+        u = torch.stack([torch.cos(a), torch.sin(a), torch.zeros(6)], 1)
+    return torch.cat([torch.zeros(1, 3), u * radius])
+
+
+def _one_probe_batch(pos):
+    """A batch of one probe node (index 0) and its neighbours, all neighbours pointing at the centre."""
+    n = len(pos)
+    node_type = torch.ones(n, dtype=torch.long)                      # all probes: one input block, one edge type
+    src = torch.arange(1, n); dst = torch.zeros(n - 1, dtype=torch.long)
+    ei = torch.stack([torch.cat([src, dst]), torch.cat([dst, src])])
+    return dict(pos=pos, node_type=node_type, edge_index=ei, edge_type=node_type[ei[0]] * 3 + node_type[ei[1]],
+                slices=dict(res=torch.arange(0), probe=torch.arange(n), surf=torch.arange(0)),
+                feat_res=torch.zeros(0, 5), feat_probe=torch.ones(n, 4), feat_surf=torch.zeros(0, 6),
+                vec0=torch.zeros(n, 3, 3), site_probe_mask=torch.ones(1, n))
+
+
+def test_degree2_separates_what_degree1_cannot():
+    """The expressivity premise behind the degree-2 claim, checked on the cheapest configuration that isolates it.
+
+    If this fails, no training run can rescue the `no_tensors` ablation: the arms would be comparing two models
+    that receive provably identical information, and any measured difference would be noise or capacity.
+    """
+    octa, hexa = _symmetric_neighbourhood("octahedron"), _symmetric_neighbourhood("hexagon")
+    # the premise itself: distances and the degree-1 aggregate agree, the traceless second moment does not
+    for p in (octa, hexa):
+        assert torch.allclose(p[1:].norm(dim=1), torch.full((6,), 4.0), atol=1e-5)
+        assert torch.allclose(p[1:].sum(0), torch.zeros(3), atol=1e-5)
+    second = lambda p: (p[1:, :, None] * p[1:, None, :]).mean(0) / 16.0
+    assert torch.allclose(second(octa), torch.eye(3) / 3, atol=1e-5)
+    assert not torch.allclose(second(hexa), torch.eye(3) / 3, atol=1e-2)
+
+    torch.manual_seed(0)
+    kw = dict(dim=32, layers=2, heads=4, chiral=False)
+    with_t = M.EquiCaveNet(dict(res=5, probe=4, surf=6), use_tensors=True, **kw).eval()
+    with torch.no_grad():
+        a, b = with_t(_one_probe_batch(octa))["occ_logit"][0], with_t(_one_probe_batch(hexa))["occ_logit"][0]
+    assert not torch.allclose(a, b, atol=1e-4), (
+        f"degree-2 channels do not separate an octahedron from a hexagon ({a.item():.6f} vs {b.item():.6f}); "
+        "the no_tensors ablation cannot conclude anything")
+
+    without_t = M.EquiCaveNet(dict(res=5, probe=4, surf=6), use_tensors=False, **kw).eval()
+    with torch.no_grad():
+        c, d = without_t(_one_probe_batch(octa))["occ_logit"][0], without_t(_one_probe_batch(hexa))["occ_logit"][0]
+    assert torch.allclose(c, d, atol=1e-5), (
+        f"the degree-<=1 model separates them ({c.item():.6f} vs {d.item():.6f}), so it is reading geometry the "
+        "premise says it cannot and the ablation is confounded")
+
+
+def test_direction_head_is_equivariant_and_its_loss_is_invariant():
+    """The direction head is a vector read-out, so it must rotate with the input; the cosine loss must not move.
+
+    If `data.random_rotation` forgot to rotate `probe_dir`, the loss would still be finite and training would still
+    run -- it would simply be supervising towards a direction in the unrotated frame, which is noise. This test is
+    the reason that rotation exists, so it is asserted here rather than left to inspection.
+    """
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4).eval()
+    b = _batch(); R = _rot(); t = torch.tensor([3.0, -2.0, 1.0])
+    n_probe = len(b["slices"]["probe"])
+    g = torch.Generator().manual_seed(3)
+    d = torch.randn(n_probe, 3, generator=g)
+    b["probe_dir"] = d / d.norm(dim=1, keepdim=True)
+    b["probe_dir_mask"] = (torch.rand(n_probe, generator=g) > 0.3).float()
+    with torch.no_grad():
+        o1 = net(b)
+        br = _apply(b, R, t); br["probe_dir"] = b["probe_dir"] @ R.T        # as random_rotation does
+        o2 = net(br)
+    assert torch.allclose(o1["dir"] @ R.T, o2["dir"], atol=1e-4)            # the head rotates with the structure
+    l1 = M.direction_loss(o1["dir"], b["probe_dir"], b["probe_dir_mask"])
+    l2 = M.direction_loss(o2["dir"], br["probe_dir"], br["probe_dir_mask"])
+    assert torch.allclose(l1, l2, atol=1e-5)                                # so the loss is invariant
+    # and a target left unrotated gives a different loss: the failure this test exists to catch
+    l_bug = M.direction_loss(o2["dir"], b["probe_dir"], b["probe_dir_mask"])
+    assert not torch.allclose(l1, l_bug, atol=1e-3)
+
+
+def test_direction_loss_edge_cases():
+    pred = torch.tensor([[1.0, 0, 0], [0.0, 1.0, 0]])
+    target = torch.tensor([[1.0, 0, 0], [1.0, 0.0, 0]])
+    assert M.direction_loss(pred, target, torch.tensor([1.0, 0.0])) == pytest.approx(0.0, abs=1e-6)
+    assert M.direction_loss(pred, target, torch.tensor([0.0, 1.0])) == pytest.approx(1.0, abs=1e-6)
+    assert M.direction_loss(pred, target, torch.zeros(2)) == pytest.approx(0.0)     # nothing usable: no contribution
+    zero = M.direction_loss(torch.zeros(1, 3), torch.tensor([[1.0, 0, 0]]), torch.ones(1))
+    assert torch.isfinite(zero)                                                     # a collapsed vector, not a NaN
+
+
+def test_listwise_loss_prefers_ordering_the_true_site_first():
+    centers = torch.tensor([[0.0, 0, 0], [20.0, 0, 0], [40.0, 0, 0]])
+    sites = torch.tensor([[0.0, 0, 0]])
+    probe_pos = centers.clone()
+    good = M.listwise_site_loss(torch.tensor([5.0, 0.0, 0.0]), centers, sites, probe_pos)
+    bad = M.listwise_site_loss(torch.tensor([0.0, 0.0, 5.0]), centers, sites, probe_pos)
+    assert good < bad                                              # confident on the hit beats confident on a miss
+    assert torch.isfinite(good) and good > 0
+    # degenerate lists contribute nothing rather than exploding
+    assert M.listwise_site_loss(torch.tensor([1.0]), centers[:1], torch.zeros(0, 3), probe_pos[:1]) == pytest.approx(0.0)
+    all_hit = M.listwise_site_loss(torch.tensor([1.0, 2.0]), sites.repeat(2, 1), sites, sites.repeat(2, 1))
+    assert all_hit == pytest.approx(0.0)                           # nothing to reject

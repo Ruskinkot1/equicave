@@ -207,6 +207,14 @@ class EquiCaveNet(nn.Module):
         self.head_pot = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 7))              # masked-potential task
         self.head_size = nn.Sequential(nn.Linear(2 * dim, dim), nn.SiLU(), nn.Linear(dim, 1))         # ligand heavy atoms of the site
         self.off_vec = nn.Linear(dim, 1, bias=False)                       # equivariant read-out from vector channels
+        # A second equivariant vector per probe, supervised by a cosine loss towards the nearest ligand heavy atom
+        # (P12). Its purpose is supervision density: the centre set loss matches one proposal per true site, so the
+        # geometric gradient reaches at most ~3 of 768 probes per structure, while this reaches every probe that sits
+        # within reach of exactly one site -- one to two orders of magnitude more geometric signal at 128 parameters.
+        # Two independent pocket ablations (EquiPocket ICML 2024, GDEGAN 2026) report a gain for this mechanism, both
+        # concentrated in DCC, which is the axis where our gradient-boosted ranker structurally cannot help.
+        self.dir_vec = nn.Linear(dim, 1, bias=False)
+        self.dir_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant arms: not equivariant
         self.off_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant model: plain regression (not equivariant)
 
     def local_frame_scalars(self, vec0: torch.Tensor) -> torch.Tensor:
@@ -275,8 +283,10 @@ class EquiCaveNet(nn.Module):
                      seq_logit=self.head_seq(x[res]), pot_logit=self.head_pot(x[probe]), x=x, probe_pos=pos[probe])
             if self.use_vectors:
                 o["offset"] = torch.einsum("nfc,f->nc", V[probe], self.off_vec.weight[0])
+                o["dir"] = torch.einsum("nfc,f->nc", V[probe], self.dir_vec.weight[0])
             else:
                 o["offset"] = self.off_inv(x[probe])
+                o["dir"] = self.dir_inv(x[probe])
             o["center"] = pos[probe] + o["offset"]
             if "site_probe_mask" in b and len(b["site_probe_mask"]):      # [S, n_probe] soft membership per labelled site
                 w = b["site_probe_mask"]
@@ -383,6 +393,45 @@ def size_loss(size_pred: torch.Tensor, n_atoms: torch.Tensor) -> torch.Tensor:
     if len(n_atoms) == 0:
         return size_pred.sum() * 0
     return Fn.smooth_l1_loss(size_pred, torch.log1p(n_atoms.float()))
+
+
+def direction_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Cosine loss from each usable probe's predicted vector to the direction of the nearest ligand heavy atom (P12).
+
+    Only the direction is supervised, not the length, so the head is free to use its magnitude for anything else; an
+    unnormalisable prediction (a probe whose vector channels collapsed to zero) contributes the maximum loss of 1
+    rather than a NaN. Returns 0 when no probe is usable, so a structure with overlapping sites costs nothing.
+    """
+    m = mask > 0.5
+    if not m.any():
+        return pred.sum() * 0.0
+    cos = torch.nn.functional.cosine_similarity(pred[m], target[m], dim=-1, eps=1e-6)
+    return (1.0 - cos).mean()
+
+
+def listwise_site_loss(conf_logit: torch.Tensor, center: torch.Tensor, site_centers: torch.Tensor,
+                       probe_pos: torch.Tensor, hit: float = 4.0, top: int = 64) -> torch.Tensor:
+    """Softmax cross-entropy over the probes of one structure, with the probes near a true site as the targets (P2).
+
+    The network has no ordering objective at all: every other head is a per-node or per-site term, so nothing in the
+    loss says that *this* probe should outrank *that* one in the same protein, which is exactly the decision the
+    benchmark's top-1 measures. This is a listwise term over the structure's own probes -- the same shape as the
+    ranking problem -- and it is normalised per structure, so a protein with many probes does not dominate.
+
+    The positive set is every probe whose predicted centre lands within `hit` of a true site centre; the loss is the
+    negative log of the total probability mass those probes receive. `top` caps the list at the most confident
+    probes so the gradient concentrates where the ordering is actually decided.
+    """
+    if not len(site_centers) or not len(conf_logit):
+        return conf_logit.sum() * 0.0
+    k = min(top, len(conf_logit))
+    idx = conf_logit.topk(k).indices
+    d = torch.cdist(center[idx], site_centers).min(1).values
+    pos = d <= hit
+    if not pos.any() or pos.all():                     # no decision to make: nothing to order, or nothing to reject
+        return conf_logit.sum() * 0.0
+    logp = torch.log_softmax(conf_logit[idx], 0)
+    return -torch.logsumexp(logp[pos], 0)
 
 
 def focal_bce(logit, y, gamma: float = 2.0, alpha: float = 0.75):

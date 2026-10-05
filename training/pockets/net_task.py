@@ -67,6 +67,11 @@ def losses(out, b, w, res_mask=None, pot_mask=None, pot_target=None):
                                       b["site_centers"], hungarian=w.get("hungarian", True))
         part["center"], part["conf"] = reg / 4.0, conf
         part["hot"] = M.focal_bce(o["hot_logit"], b["y_hot"])
+        if "dir" in o and "probe_dir" in b:            # dense geometric signal: every probe near exactly one site
+            part["dir"] = M.direction_loss(o["dir"], b["probe_dir"], b["probe_dir_mask"])
+        if w.get("w_listwise", 0.0) and "site_centers" in b:   # the only term that orders probes within a structure
+            part["listwise"] = M.listwise_site_loss(o["conf_logit"], o["center"], b["site_centers"],
+                                                    o.get("probe_pos", b["pos"][b["slices"]["probe"]]))
         if "prop_logit" in o:
             part["prop"] = torch.nn.functional.binary_cross_entropy_with_logits(o["prop_logit"], b["y_prop"])
         if last and res_mask is not None and "seq_logit" in o and "res_type" in b:
@@ -196,6 +201,48 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
     return res
 
 
+def _match_dim(in_dims, mc, kw, cfg, reference: str, log=print, tol: float = 0.02) -> int:
+    """Widen a reduced arm until its parameter count is within `tol` of the reference arm's.
+
+    Turning off the tensor or vector channels also removes their projections, their contribution to the edge input
+    and their gates, so the arm is strictly smaller than `full` and the difference between them measures the degree
+    *plus* the capacity. Bisecting on `dim` removes the capacity half of that, which is what makes the degree-2 and
+    equivariance ablations able to conclude anything.
+    """
+    import yaml
+    abl = yaml.safe_load((DEFAULTS.parent / "ablations.yaml").read_text())["ablations"]
+    ref_over = {k.split(".", 1)[1]: v for k, v in abl.get(reference, {}).items() if k.startswith("model.")}
+    ref_mc = {k: v for k, v in dict(cfg["model"], **ref_over).items() if k not in ("backbone", "lmax", "match_params")}
+    count = lambda m: sum(p.numel() for p in M.EquiCaveNet(in_dims, **m, **kw).parameters())
+    target = count(dict(ref_mc, n_edge_scalar=mc.get("n_edge_scalar", 0), n_init_vec=mc.get("n_init_vec", 3)))
+    # dim must stay a multiple of the head count, so the search is over valid widths rather than every integer
+    base = dict(mc)
+    step = max(1, int(base.get("heads", 1)))
+    widths = [d for d in range(step, base["dim"] * 32 + step, step)]
+    # The step in dim is the head count, and one step moves the parameter count by several per cent, so an exact
+    # match does not exist. We take the smallest valid width that reaches the reference count, never a smaller one:
+    # the reduced arm then has at least as many parameters as `full`, so if it still loses, the degree it lacks is
+    # doing the work and the result is conclusive in the direction that matters. The achieved excess is logged and
+    # stored in the model card so the paper reports it rather than implying an exact match.
+    best, got = None, None
+    for d in widths:                                   # the count is monotone in dim
+        c = count(dict(base, dim=d))
+        if c >= target:
+            best, got = d, c
+            break
+    if best is None:
+        best, got = widths[-1], count(dict(base, dim=widths[-1]))
+    log(f"match_params={reference}: dim {base['dim']} -> {best}, parameters {got} against {target} "
+        f"({100 * (got - target) / target:+.1f} %)")
+    if got < target:
+        log(f"  WARNING: the arm is SMALLER than {reference}; a positive result for {reference} would be confounded "
+            f"by capacity and cannot be published as a degree effect")
+    elif got > (1 + tol) * target:
+        log(f"  note: {100 * (got - target) / target:.1f} % more parameters than {reference} (the step in dim is "
+            f"{step}, so no closer width exists). The arm is over-provisioned, which only strengthens a null result.")
+    return best
+
+
 def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict:
     import torch
     seed_all(cfg["optim"]["seed"])
@@ -203,6 +250,7 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     in_dims = dict(res=d0["feat_res"].shape[1], probe=d0["feat_probe"].shape[1], surf=d0["feat_surf"].shape[1])
     mc = dict(cfg["model"])
     backbone = mc.pop("backbone", "cartesian")
+    match_to = mc.pop("match_params", None)
     mc["n_edge_scalar"] = d0["edge_scalar"].shape[1] if "edge_scalar" in d0 else 0
     mc["n_init_vec"] = int(d0["vec0"].shape[1])
     mc.setdefault("invariant_mode", cfg["model"].get("invariant_mode", "frames"))
@@ -212,6 +260,8 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         model = EquiCaveNetE3(in_dims, **{k: v for k, v in mc.items() if k in
                                           ("dim", "layers", "lmax", "n_rbf", "cutoff", "dropout", "n_init_vec")}, **kw).to(device)
     else:
+        if match_to:
+            mc["dim"] = _match_dim(in_dims, mc, kw, cfg, match_to, log)
         model = M.EquiCaveNet(in_dims, **mc, **kw).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["optim"]["lr"], weight_decay=cfg["optim"]["weight_decay"])
     E, acc = cfg["optim"]["epochs"], cfg["optim"]["accumulate"]
@@ -220,7 +270,24 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
     ema = EMA(model, cfg["optim"]["ema"]); rng = np.random.default_rng(cfg["optim"]["seed"])
     use_amp = cfg["optim"].get("amp", "none") == "bf16" and device.type == "cuda"
     best, best_state, bad, history = -1.0, None, 0, []
+    # A cache built before the direction target existed has no `probe_dir`, and `losses` skips the term when it is
+    # absent -- so without this check a GPU run would train for hours with its headline new mechanism silently off.
+    if cfg["loss"].get("w_dir", 0.0) > 0 and "probe_dir" not in d0:
+        raise RuntimeError(
+            f"loss.w_dir is {cfg['loss']['w_dir']} but the feature cache at {cfg['data']['cache_dir']} has no "
+            "'probe_dir': it predates the direction target. Delete the cache directory and rerun so build_cache "
+            "regenerates it, or set loss.w_dir=0.0 (ablation arm no_direction_loss) to train without it.")
+    st = cfg.get("stages", {}) or {}
+    stage1 = int(st.get("warmup_epochs", 0)) if st.get("enabled") else 0
+    if stage1:
+        log(f"staged training: epochs 1-{stage1} with {','.join(st.get('stage1_zero', []))} at zero, then all terms")
     for ep in range(E):
+        # P6: stage 1 converges the dense per-node heads before the sparse ranking terms are switched on, so the
+        # sparse gradients do not fight a dense signal through an untrained trunk. A schedule, not a parameter.
+        lw = dict(cfg["loss"])
+        if ep < stage1:
+            for k in st.get("stage1_zero", []):
+                lw[k] = 0.0
         model.train(); t0 = time.time(); order = rng.permutation(len(files_tr)); agg = {}
         for i, j in enumerate(order):
             b = D.to_torch(D.load(files_tr[j]), device)
@@ -229,7 +296,7 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
             b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
             b, pot_mask, pot_target = D.mask_probe_potential(b, cfg["loss"].get("pot_mask_frac", 0.2), rng)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                out = model(b); total, parts = losses(out, b, cfg["loss"], res_mask, pot_mask, pot_target)
+                out = model(b); total, parts = losses(out, b, lw, res_mask, pot_mask, pot_target)
             (total / acc).backward()
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0) + v / len(order)
