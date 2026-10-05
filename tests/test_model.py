@@ -297,3 +297,53 @@ def test_listwise_loss_prefers_ordering_the_true_site_first():
     assert M.listwise_site_loss(torch.tensor([1.0]), centers[:1], torch.zeros(0, 3), probe_pos[:1]) == pytest.approx(0.0)
     all_hit = M.listwise_site_loss(torch.tensor([1.0, 2.0]), sites.repeat(2, 1), sites, sites.repeat(2, 1))
     assert all_hit == pytest.approx(0.0)                           # nothing to reject
+
+
+def test_a_full_training_step_runs_under_bf16_autocast():
+    """Mixed precision is the default on a GPU (`optim.amp: bf16`), and it was broken on the first step of a real run.
+
+    Autocast leaves some operations in float32 -- normalisation, softmax -- and runs the linear layers in bf16, so a
+    buffer allocated in one dtype and written from the other raises outright. It surfaced three layers deep: the
+    node embedding into the residual stream, then the attention message accumulation, then the normalised channels
+    handed to the next layer. A CPU autocast context reproduces all of it, so this test guards a GPU-only default
+    without needing a GPU.
+    """
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=3, heads=4, recycles=1)
+    b = _batch()
+    n_probe = len(b["slices"]["probe"])
+    g = torch.Generator().manual_seed(1)
+    b["y_res"] = (torch.rand(len(b["slices"]["res"]), generator=g) > 0.7).float()
+    b["y_occ"] = (torch.rand(n_probe, generator=g) > 0.8).float()
+    b["y_hot"] = (torch.rand(n_probe, 7, generator=g) > 0.9).float()
+    b["site_centers"] = torch.randn(2, 3, generator=g)
+    b["y_prop"] = (torch.rand(2, 14, generator=g) > 0.5).float()
+    d = torch.randn(n_probe, 3, generator=g)
+    b["probe_dir"] = d / d.norm(dim=1, keepdim=True)
+    b["probe_dir_mask"] = (torch.rand(n_probe, generator=g) > 0.3).float()
+    w = dict(w_res=1.0, w_occ=1.0, w_center=0.5, w_conf=0.5, w_hot=1.0, w_prop=0.5, w_dir=0.5, w_listwise=0.3,
+             occ_pos_weight=3.0, res_pos_weight=3.0, hungarian=True, recycle_weight=0.5)
+
+    from training.pockets import net_task as NT
+    opt = torch.optim.AdamW(net.parameters(), lr=1e-3)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = net(b)
+        total, parts = NT.losses(out, b, w)
+    total.backward()
+    opt.step()
+    assert torch.isfinite(total), "the loss is not finite under bf16"
+    assert {"dir", "listwise"} <= set(parts), "the new terms did not contribute under autocast"
+    assert all(np.isfinite(v) for v in parts.values())
+    assert all(torch.isfinite(p.grad).all() for p in net.parameters() if p.grad is not None)
+
+
+def test_bf16_and_fp32_agree_to_low_precision():
+    """The dtype casts must not change what the model computes, only how precisely."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4).eval()
+    b = _batch()
+    with torch.no_grad():
+        fp32 = net(b)["occ_logit"]
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            bf16 = net(b)["occ_logit"]
+    assert torch.allclose(fp32, bf16.float(), atol=0.2), (fp32[:4], bf16[:4])

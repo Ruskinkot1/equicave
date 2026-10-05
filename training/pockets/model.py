@@ -110,10 +110,15 @@ class GeoTensorAttention(nn.Module):
     def forward(self, x, V, T, pos, edge_index, edge_type, edge_scalar=None):
         src, dst = edge_index                  # message j=src -> i=dst
         n, F, H = x.shape[0], self.dim, self.heads
-        r = pos[dst] - pos[src]
+        # Mixed precision: the residual stream `x` carries the working dtype. Under autocast a Linear returns bf16
+        # while a softmax runs in float32 and a coordinate difference stays float32, so a product of the two
+        # promotes back to float32 and `index_add_` into a bf16 buffer raises. Edge geometry is brought to the
+        # stream's dtype once, here, rather than patched at each accumulation.
+        dt = x.dtype
+        r = (pos[dst] - pos[src]).to(dt)
         d = r.norm(dim=1).clamp(min=1e-6)
         u = r / d[:, None]
-        inv = [x[dst], x[src], self.rbf(d), self.etype(edge_type)]
+        inv = [x[dst], x[src], self.rbf(d), self.etype(edge_type).to(dt)]
         if self.n_edge_scalar:
             inv.append(edge_scalar if edge_scalar is not None else torch.zeros(len(src), self.n_edge_scalar, device=x.device, dtype=x.dtype))
         if self.use_vectors:
@@ -125,9 +130,11 @@ class GeoTensorAttention(nn.Module):
             Tu = torch.einsum("efij,ej->efi", Tj, u)                       # T_j u          [E, F, 3]
             utu = (Tu * u[:, None, :]).sum(-1)                             # u^T T_j u      [E, F]
             inv += [utu, Tj.flatten(2).norm(dim=-1)]
-        out = self.edge_mlp(torch.cat(inv, -1))
+        # `.to(dt)`: the MLP ends in a normalisation, which autocast runs in float32, so its output -- and the
+        # gates and attention logits taken from it -- come back float32 even when the stream is bf16.
+        out = self.edge_mlp(torch.cat(inv, -1)).to(dt)
         att = seg_softmax(out[:, :H], dst, n)                              # [E, H]
-        a = att.repeat_interleave(F // H, dim=1)                           # [E, F]
+        a = att.repeat_interleave(F // H, dim=1).to(dt)                    # [E, F]; softmax runs in fp32
         gates = out[:, H:].view(-1, self.n_gates, F)
         g = iter(gates.unbind(1))
         m_x = next(g) * self.wx(x[src])
@@ -168,12 +175,15 @@ class GeoTensorAttention(nn.Module):
                 ninv.append((torch.cross(a_, b_, dim=-1) * c_).sum(-1))     # triple products: flip under reflection
         if self.use_tensors:
             ninv.append(T.flatten(2).norm(dim=-1))
-        h, g1, g2 = self.node_mlp(torch.cat(ninv, -1)).chunk(3, -1)
+        h, g1, g2 = self.node_mlp(torch.cat(ninv, -1)).to(dt).chunk(3, -1)
         x = x + h
         if self.use_tensors:
             V = V + g1[..., None] * torch.einsum("nfij,nfj->nfi", T, V)
             T = T + g2[..., None, None] * sym_traceless(V, V)
-        return self.norm(x, V, T)
+        # EqNorm normalises, and autocast runs normalisation in float32, so without this the next layer receives
+        # float32 channels while its residual buffers are bf16 -- the same mismatch one layer later.
+        xo, Vo, To = self.norm(x, V, T)
+        return xo.to(dt), None if Vo is None else Vo.to(dt), None if To is None else To.to(dt)
 
 
 class EquiCaveNet(nn.Module):
@@ -239,17 +249,29 @@ class EquiCaveNet(nn.Module):
         return torch.einsum("nij,nkj->nki", R, vec0).reshape(len(vec0), -1)
 
     def trunk(self, b: dict, pos: torch.Tensor, ei: torch.Tensor, et: torch.Tensor, es):
-        """One pass of the message-passing trunk at the given probe positions. Returns (x, V, T)."""
-        x = torch.zeros(len(b["node_type"]), self.dim, device=pos.device)
+        """One pass of the message-passing trunk at the given probe positions. Returns (x, V, T).
+
+        Mixed precision. Under `torch.autocast` a Linear returns the autocast dtype (bf16) while a buffer allocated
+        here and an nn.Embedding lookup stay float32, and writing one into the other raises outright -- which is how
+        this surfaced, on the first bf16 step of a GPU run. The node features are embedded first, the working dtype
+        is taken from what those layers actually produced, and everything entering the layer stack is brought to it,
+        so the pass runs in one dtype whether autocast is on or off instead of silently promoting back to float32
+        at the first addition (which would keep bf16 enabled and deliver none of its speed).
+        """
         inv_scalars = self.local_frame_scalars(b["vec0"]) if self.n_scalarised else None
+        parts = {}
         for k, idx in b["slices"].items():
             if len(idx):
                 f = b[f"feat_{k}"]
                 if inv_scalars is not None:
                     f = torch.cat([f, inv_scalars[idx]], -1)
-                x[idx] = self.embed[k](f)
-        x = x + self.type_emb(b["node_type"])
-        V = torch.einsum("nkc,kf->nfc", b["vec0"], self.vec_in.weight.t()) if self.use_vectors else None
+                parts[k] = self.embed[k](f)
+        dt = next(iter(parts.values())).dtype if parts else pos.dtype
+        x = torch.zeros(len(b["node_type"]), self.dim, device=pos.device, dtype=dt)
+        for k, v in parts.items():
+            x[b["slices"][k]] = v
+        x = x + self.type_emb(b["node_type"]).to(dt)
+        V = torch.einsum("nkc,kf->nfc", b["vec0"].to(dt), self.vec_in.weight.t().to(dt)) if self.use_vectors else None
         T = sym_traceless(V, V) if self.use_tensors else None
         for layer in self.layers:
             x, V, T = layer(x, V, T, pos, ei, et, es)
