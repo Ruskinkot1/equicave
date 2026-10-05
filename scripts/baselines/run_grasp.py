@@ -74,6 +74,11 @@ def grasp_predict(repo: pathlib.Path, pdb_paths: list, model: str, threshold: fl
             log(f"  {pdb}: {len(coords)} coordinates against {len(p)} scores; skipped")
             continue
         bind, ranks, _ = SM.cluster_atoms_meanshift(coords, p, threshold=threshold)
+        if bind is None or ranks is None or not len(bind):
+            # Their clustering returns (None, None, None) when no atom passes the threshold: the method predicts no
+            # site for this structure. That is a prediction, not an error, and it counts as a miss in the metrics.
+            out[pdb] = []
+            continue
         ranks = np.asarray(ranks)
         lab = p[:, 1] > threshold
         sites = []
@@ -98,7 +103,9 @@ def predict_bisect(repo, paths, model, threshold, jobs, log=print) -> dict:
     """
     try:
         return grasp_predict(repo, paths, model, threshold, jobs, log=lambda _m: None)
-    except RuntimeError as ex:
+    except Exception as ex:                                     # noqa: BLE001 -- see the comment below
+        # Any exception, not only the RuntimeError we raise for a non-zero exit: a surprise from their code or from
+        # our conversion of it must cost the structure that caused it, never the rest of the benchmark.
         if len(paths) == 1:
             log(f"  {pathlib.Path(paths[0]).stem}: GrASP failed, skipped ({str(ex).splitlines()[0][:80]})")
             return {}
