@@ -71,14 +71,23 @@ def predict(pdb_path, mode: str = "fast", model: str | Path | None = None, ranke
     feats, net_state = _network_features(pdb_path, cands, cfg, model)
     if feats is None:
         notes.append("network not used (no model given or available)")
+    # Peptide mode's ranker is trained with the 14 peptide features, and only `peptide.groove_features` produces
+    # them -- the small-molecule featuriser does not. Without this the peptide path served a 264-feature model
+    # without the columns that distinguish a groove from a cavity, which is the whole point of the mode. It stayed
+    # invisible while the repository carried a peptide ranker predating those features; a freshly trained one made
+    # the stale-feature guard fire instead, which is what the guard is for.
+    extra = feats
+    if det.get("groove"):
+        pep_rows = PEP.groove_features(cands, st)
+        extra = [dict(g, **(f or {})) for g, f in zip(pep_rows, feats or [{}] * len(cands))]
     rk = ranker or modes.ranker_path(mode)
     if rk and Path(rk).exists():
-        rows = pf.rank_sites(rk, cands, st, extra=feats)
+        rows = pf.rank_sites(rk, cands, st, extra=extra)
         score_key = "ranker_score"
     else:
         rows = pf.featurize(cands, st)
-        if feats:
-            for r, f in zip(rows, feats):
+        if extra:
+            for r, f in zip(rows, extra):
                 r.update(f)
         for r in rows:
             r["ranker_score"] = -r["nat_rank"]
