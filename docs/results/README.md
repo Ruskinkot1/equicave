@@ -16,6 +16,29 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## All five benchmarks under the corrected protocol (2026-10-05)
+
+One model (`models/ranker_native.txt`, 32 features — the set that transfers best), one protocol, the full assembly
+as the receptor. The row is the structures **not** sharing a 30 %-identity cluster with our training manifest,
+except held-out, which is excluded from training by construction.
+
+| benchmark | n | detector top-1 | + ranker top-1 | top-N | top-(N+2) | ceiling |
+|---|---|---|---|---|---|---|
+| held-out drug targets | 12 | 0.917 | 0.833 | 0.833 | 1.000 | 1.000 |
+| HOLO4K | 1501 | 0.635 | **0.785** | 0.828 | 0.923 | 0.988 |
+| COACH420 | 179 | 0.598 | 0.698 | 0.771 | 0.877 | 0.989 |
+| LIGYSIS | 1108 | 0.433 | 0.610 | 0.709 | 0.821 | 0.941 |
+| CryptoBench (apo) | 120 | 0.258 | 0.292 | 0.450 | 0.600 | 0.850 |
+
+Read across it rather than down: the ranker is worth +0.15 to +0.18 top-1 on HOLO4K, COACH420 and LIGYSIS, and
+almost nothing on CryptoBench (+0.034), where the pockets are closed. The candidate ceiling holds near 0.99 on the
+holo benchmarks and falls to 0.850 on apo structures, which is the only set where detection, not ranking, is the
+binding constraint. Held-out has twelve structures and its intervals are too wide to rank anything; the detector
+beating the ranker there is one structure.
+
+The two sets whose earlier numbers were invalidated by the single-chain receptor bug were LIGYSIS and CryptoBench,
+since every row of theirs names a chain. HOLO4K names none, so its earlier numbers were never affected by it.
+
 ## Resolved: the benchmark numbers were measured on a receptor the model was never trained on
 
 **Cause.** Every COACH420 entry names a chain and `evaluate.py` passed it to `read_pdb` as a receptor filter, while
