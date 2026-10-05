@@ -106,6 +106,21 @@ Paired cluster bootstrap, our best model against P2Rank: top-1 −0.052 [−0.12
 distinguishable on any of the three metrics. At three or more sites per structure they are equal (+0.000 on 40
 structures).
 
+**What is still not symmetric in this table**, stated because a reader should not have to find it:
+
+1. **Leakage control applies to us only.** The row excludes structures sharing a 30 %-identity cluster with *our*
+   training manifest. P2Rank's own training set (CHEN11 and others) is not under our control and its overlap with
+   COACH420 is not measured here, so we pay a leakage penalty the baseline does not. The direction of that bias is
+   against us, but it is a bias either way.
+2. **The prediction budget is not equalised.** We emit 30 predictions per structure and P2Rank 9.6. This does not
+   affect top-1 or top-N, where N is set by the structure, but it does inflate our **ceiling** relative to theirs —
+   0.989 against 0.931 is partly a budget difference and should not be read as a pure detection advantage. A
+   ceiling at a matched budget has not been measured; `--merge-radii` exists for it.
+3. **Only fpocket and P2Rank are actually run by us.** No modern deep-learning predictor is in this table.
+   DeepPocket, DeepSurf, GrASP and VN-EGNN have wrappers in `scripts/baselines/` and have never been executed, so
+   the strongest claim this table supports is parity with a strong 2018 random-forest method — not with the state
+   of the art.
+
 **Honest state.** Detection is not the bottleneck: our candidate set contains the answer for 0.989 of these
 structures against P2Rank's 0.931. Ranking is, and two results frame it:
 
@@ -140,6 +155,13 @@ comparable to the table above, and the survey shows how badly: fpocket, a fixed 
 differ. 40 % of HOLO4K and 56 % of COACH420 structures even differ in chain count between the asymmetric and the
 biological unit, and one 2026 paper excluded COACH420 outright because most of it was already in its training data.
 So we re-run every baseline ourselves (`scripts/baselines/run_external.py`) and never copy a published row.
+
+That chain-count observation is not hypothetical: it is exactly what broke our own COACH420 numbers for a day.
+Evaluating on the single chain each benchmark row names, while the model was trained on the whole assembly, moved
+the protein centroid, emptied the shell features of a neighbouring chain's atoms and unburied every interface
+pocket — and every richer ranker then scored *below* doing no ranking at all. The measurement is in
+`docs/results/README.md`. If a difference of this size can come from one line of receptor handling, a published row
+measured under an unstated chain convention cannot be compared with ours at all.
 
 Protocol consequences we adopt from the independent LIGYSIS comparison: report top-N **and** top-(N+2), report DCC at
 4 Å **and** 10-12 Å (4 Å is too strict for large ligands, and the reported advantage of equivariant detectors is
