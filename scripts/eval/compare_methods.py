@@ -55,9 +55,22 @@ def main():
                                                       ref_per[c].to_numpy(float), ref_per["cluster30"].to_numpy())
                                      for c in ("top1", "topN2")}
         results[f"{tag} (own order)"] = st
-        # the same candidates re-ranked by a LambdaRank model trained out of fold on that table's own features
-        feats = [f for f in pf.FEATURES if f in d] or [c for c in d.columns if c.startswith("tool_")]
-        if "fold" in d and len(feats) >= 3:
+        # The same candidates re-ranked by a LambdaRank model trained out of fold on that table's own features.
+        #
+        # This is only meaningful for a table that carries our feature set. An external tool's table holds its own
+        # score and rank and nothing else, so "their candidates with our ranker" would be a monotone function of
+        # their own ranking -- not a comparison of generators. Doing it properly means re-featurising their
+        # candidate centres with pocket_features.featurize, which this script does not do; until then the row is
+        # reported as absent with the reason, rather than skipped in silence (it was: a single one of our features
+        # happens to appear in those tables, which made the old `or` fall through and the block never ran).
+        ours = [f for f in pf.FEATURES if f in d]
+        feats = ours if len(ours) >= 3 else []
+        if not feats:
+            tool_cols = [c for c in d.columns if c.startswith("tool_")]
+            print(f"  {tag}: no ranker row -- the table has {len(ours)} of our {len(pf.FEATURES)} features "
+                  f"(only {', '.join(tool_cols)}), so re-ranking it would just reproduce its own order. "
+                  f"Re-featurise its centres to compare generators under one ranker.")
+        if "fold" in d and feats:
             scores = [cv_scores(d.reset_index(drop=True), feats, s) for s in range(a.seeds)]
             pers = [M.per_structure(d.reset_index(drop=True).assign(_s=s), "_s") for s in scores]
             avg = pd.concat(pers).groupby("pdb", sort=False).agg({c: "mean" for c in ("top1", "top3", "topN", "topN2", "mrr", "ceiling")} | {"cluster30": "first"}).reset_index()

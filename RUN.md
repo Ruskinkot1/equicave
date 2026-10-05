@@ -4,8 +4,48 @@
 > plan, the gate that stops a wasted week, and the two rules for reading the numbers (the candidate ceiling is
 > already 0.989, and cross-validated top-1 does not predict benchmark top-1).
 
-For a student or collaborator starting from a fresh clone. Every command is copy-paste; nothing needs editing.
-If a step fails, the error is the deliverable: send it along with the log, do not work around it silently.
+## The whole thing, on the largest dataset, in one command
+
+```bash
+git clone <repo> && cd equicave
+micromamba create -y -f training/environment.yml && micromamba activate equicave   # or: make setup
+pip install -e .
+
+SCALE=max JOBS=$(nproc) bash scripts/train/train_all.sh
+```
+
+That assembles the data, trains everything and validates it, in order: structures, the candidate table, the
+per-point ligandability model, two rankers, the network feature cache, the network on three seeds, the
+out-of-fold network features, the hybrid ranker, and then every benchmark under one protocol.
+
+**Every stage is skipped when its output exists and every long stage checkpoints internally**, so if the run dies
+or the machine reboots, the same command continues where it stopped. Nothing needs to be cleaned up first.
+
+What `SCALE` costs, so the choice is made with numbers rather than optimism:
+
+| `SCALE` | structures | 30 %-identity clusters | disk | CPU hours (16 cores) | GPU hours per seed (A100) |
+|---|---|---|---|---|---|
+| `small` (default) | 1 499 | 1 085 | ~6 GB | ~1 h | ~3.5 h |
+| `big` | 3 965 | 2 824 | ~16 GB | ~3 h | ~10 h |
+| **`max`** | **11 671** | **6 223** | **~45 GB** | **~8 h** | **~30 h** |
+
+All three manifests are committed, so no RCSB metadata queries are needed. The script trains three network seeds,
+so multiply the GPU column by three; `NET_SEEDS=1` for a first look. Without a GPU the network stages fall back to
+a reduced configuration that converges but is not the publishable one, and say so; everything else is CPU work.
+
+Useful variants:
+
+```bash
+STAGES="data candidates points ranker eval" SCALE=max bash scripts/train/train_all.sh   # skip the GPU stages
+SCALE=max NET_SEEDS=1 bash scripts/train/train_all.sh                                   # one seed first
+FPOCKET=/path/to/fpocket PRANK=/path/to/prank STAGES=baselines bash scripts/train/train_all.sh
+```
+
+Two measured facts to keep in mind while reading whatever it produces, both of which cost this project a day:
+
+* **Cross-validated top-1 on our manifest does not predict benchmark top-1.** Three feature sets ranked in the
+  *opposite* order on COACH420. Judge a change on the `eval` stage.
+* **The candidate ceiling is already 0.989 on COACH420.** Detection is not the bottleneck; ranking is.
 
 ## 0. Setup (once, 5 minutes)
 

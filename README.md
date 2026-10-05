@@ -170,35 +170,29 @@ it had already found), state the ligand rule and the resulting counts, and separ
 
 ## Install and train
 
-Step-by-step instructions for a new collaborator: [`RUN.md`](RUN.md).
-
 ```bash
-make setup                              # pip install -e ".[dev,train,viz]"
-bash scripts/train/train_all.sh         # the whole pipeline; GPU stages are skipped automatically on a CPU
-```
-`train_all.sh` is restartable (each stage is skipped when its output exists) and takes
-`JOBS=`, `SEEDS=`, `RUNS=`, `NET_CFG=` and `STAGES=` overrides:
+git clone <repo> && cd equicave
+micromamba create -y -f training/environment.yml && micromamba activate equicave
+pip install -e .
 
-| stage | what it does | needs |
-|---|---|---|
-| `data` | RCSB manifest (CC0) and structures | network, ~20 min |
-| `candidates` | native candidates, 118 features, labels | CPU, ~3.6 s/structure/core |
-| `ranker` | LambdaRank, cluster CV, 5 seeds, ablations | CPU, minutes |
-| `peptide` | peptide benchmark, groove candidates, peptide ranker | CPU |
-| `labels` | property and hotspot label statistics | CPU |
-| `net` | EquiCave-Net, fold 0, 3 seeds — see [`GPU_EXPERIMENTS.md`](GPU_EXPERIMENTS.md) | **GPU** |
-| `net-oof` | out-of-fold network features | **GPU** |
-| `hybrid` | ranker with the network's scores | CPU |
-| `ablations` | full / no_probes / no_surface / no_esm / no_tensors / invariant / achiral | **GPU** |
-| `baselines` | fpocket and P2Rank on the same structures | `FPOCKET=`, `PRANK=`, Java |
-| `eval` | held-out, COACH420, HOLO4K with one protocol | CPU |
-
-```bash
-STAGES="net net-oof hybrid ablations" JOBS=8 bash scripts/train/train_all.sh   # a GPU box
-FPOCKET=/opt/fpocket PRANK=/opt/p2rank/prank STAGES=baselines bash scripts/train/train_all.sh
+SCALE=max JOBS=$(nproc) bash scripts/train/train_all.sh
 ```
-Individual stages are also `make` targets (`make candidates`, `make ranker`, `make net`, ...) and
-`python -m training list` shows the three training tasks. `notebooks/equicave_train.ipynb` runs everything with figures.
+
+One command assembles the largest dataset, trains every stage and validates it: structures, the 118-feature
+candidate table, the per-point ligandability model, two rankers, the network feature cache, the network on three
+seeds, the out-of-fold network features, the hybrid ranker, then every benchmark under one protocol. Each stage is
+skipped when its output exists and each long stage checkpoints internally, so a run that dies continues from the
+same command.
+
+| `SCALE` | structures | clusters | disk | CPU hours (16 cores) | GPU hours per seed (A100) |
+|---|---|---|---|---|---|
+| `small` (default) | 1 499 | 1 085 | ~6 GB | ~1 h | ~3.5 h |
+| `big` | 3 965 | 2 824 | ~16 GB | ~3 h | ~10 h |
+| **`max`** | **11 671** | **6 223** | **~45 GB** | **~8 h** | **~30 h** |
+
+All three manifests are committed. Without a GPU the network stages fall back to a reduced configuration that
+converges but is not publishable, and say so; every other stage is CPU work. Details and per-stage commands in
+[`RUN.md`](RUN.md); the GPU experiment plan in [`GPU_EXPERIMENTS.md`](GPU_EXPERIMENTS.md).
 
 ## Layout
 | path | contents |
