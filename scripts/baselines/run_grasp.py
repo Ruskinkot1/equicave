@@ -95,7 +95,11 @@ def main():
                     help="which trained_models subdirectory to use; train_full is trained on GrASP's full "
                          "training set, coach420_mlig and holo4k_mlig are the arms they evaluate on those sets")
     ap.add_argument("--threshold", type=float, default=0.5, help="GrASP's own per-atom site threshold")
-    ap.add_argument("--batch", type=int, default=40); ap.add_argument("--limit", type=int, default=0)
+    # One structure per invocation by default. Their parse step runs joblib across every core and a single
+    # pathological structure takes the whole Parallel call down with it, so a larger batch loses every
+    # structure in it: measured on COACH420, batches of 40 lost 220 of 300 that way. Per-structure isolation
+    # costs a few seconds of start-up each and loses only the structure that actually fails.
+    ap.add_argument("--batch", type=int, default=1); ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
     if not a.repo:
