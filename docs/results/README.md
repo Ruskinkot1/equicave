@@ -93,6 +93,23 @@ information; they are not evidence that it will help on a benchmark, and in thes
 way. The per-point model's own out-of-fold point AUROC of 0.865 is unaffected by this -- that is a measurement about
 points, not a claim about ranking transfer.
 
+## Which modern methods can actually be run (checked 2026-10-05, primary sources)
+
+The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run
+at all without retraining them, which is a fact about the field's reproducibility rather than a limitation of this
+project, so it is recorded with what was checked:
+
+| method | code | weights | verdict |
+|---|---|---|---|
+| **GrASP** (Tiwary 2024) | MIT | **in the repository**, `trained_models/`, 1.6 MB per arm | **runnable** -- and run, see `scripts/baselines/run_grasp.py` |
+| VN-EGNN (ICML 2024) | MIT | **none published**: the Zenodo record (17365855) holds datasets only, 763 MB, and there are no GitHub releases; `src/eval.py` loads a checkpoint from a Weights-and-Biases run id | not runnable without retraining on a GPU |
+| EquiPocket (ICML 2024) | shipped as a baseline inside the VN-EGNN repository | none | not runnable without retraining; also needs MSMS for surfaces |
+| DeepPocket (2021) | MIT | published (OneDrive) | blocked on libmolgrid, whose build is CUDA-oriented |
+| GDEGAN (2026) | not located | not located | nothing to run |
+
+So a claim about "beating the state of the art" currently rests on GrASP alone. The other three are not a matter of
+effort: without published weights, reproducing them means retraining on their data, which is a different project.
+
 ## Negative results worth keeping
 
 **A cascade re-ranker over the top candidates is worse than one model over all of them** (measured 2026-10-04 on the
