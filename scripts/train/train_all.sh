@@ -143,10 +143,15 @@ if has eval; then
   say "11. validation: every benchmark, one protocol"
   $PY scripts/data/fetch_eval_sets.py || true
   NET_MODEL=$(ls -t "$RUNS"/net/*/model.pt 2>/dev/null | head -1 || true)
+  # --point-model is passed explicitly: evaluate.py defaults to models/point_native.txt, which at another SCALE is
+  # a model fitted on a different dataset. It would not fail -- it would serve the wrong one.
   for m in "ranker_${TAG}" "ranker_${TAG}_points"; do
     [[ -f models/$m.txt ]] || continue
+    PM=()
+    [[ -f "models/point_${TAG}.txt" ]] && PM=(--point-model "models/point_${TAG}.txt")
     for set_name in heldout coach420 holo4k ligysis cryptobench_test; do
-      $PY scripts/eval/evaluate.py --set "$set_name" --ranker "models/$m.txt" --jobs "$JOBS" --tag "_$m" || true
+      $PY scripts/eval/evaluate.py --set "$set_name" --ranker "models/$m.txt" "${PM[@]+"${PM[@]}"}" \
+          --jobs "$JOBS" --tag "_$m" || true
     done
   done
   if [[ -n "$NET_MODEL" ]]; then

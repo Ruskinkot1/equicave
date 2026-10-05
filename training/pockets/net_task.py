@@ -372,7 +372,10 @@ def run(a) -> int:
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold
         from equicave import pocket_features as pf
         rows = []
-        cand = pd.read_csv(Path("data/processed") / f"candidates_{cfg.get('cand_tag', 'native')}.csv")
+        # find_table, not a hardcoded .csv: every candidate table in this project is gzipped, and reading the wrong
+        # name here failed *after* the five folds had trained, which is the most expensive place to discover it.
+        from equicave import tables
+        cand = tables.read_table(Path("data/processed"), f"candidates_{cfg.get('cand_tag', 'native')}")
         for k in sorted(set(folds.values())):
             tr = [f for f in files if folds[f] != k]; va = [f for f in files if folds[f] == k]
             fd = run_dir(out_dir, f"fold{k}"); r = train_one(cfg, tr, va, device, fd, log)
