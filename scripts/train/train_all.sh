@@ -128,8 +128,11 @@ if has hybrid; then
 fi
 
 if has ablations; then
-  say "9. ablation grid, $NET_SEEDS seeds each (GPU hours: multiply the per-seed cost by the arm count)"
-  bash scripts/train/run_ablations.sh "$RUNS/ablations" 0 "$NET_SEEDS"
+  say "9. ablation grid, $NET_SEEDS seeds each"
+  # The runner reads the arm list from training/configs/ablations.yaml, gives every arm that changes the
+  # featurisation its own cache, and skips runs that already have a metrics.json. Narrow it with GROUP= (decoder,
+  # probes, equivariance, mechanisms) or ARMS=, and see the cost first with DRY_RUN=1.
+  OUT="$RUNS/ablations" FOLD=0 SEEDS="$NET_SEEDS" DEVICE="$DEVICE" CFG="$NET_CFG"     GROUP="${GROUP:-all}" ARMS="${ARMS:-}" DRY_RUN="${DRY_RUN:-0}"     bash scripts/train/run_ablations.sh
 fi
 
 if has baselines; then
