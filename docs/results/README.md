@@ -136,6 +136,24 @@ information; they are not evidence that it will help on a benchmark, and in thes
 way. The per-point model's own out-of-fold point AUROC of 0.865 is unaffected by this -- that is a measurement about
 points, not a claim about ranking transfer.
 
+## Our training set does not overlap the benchmarks by identity (2026-10-06)
+
+YuelPocket (PNAS 2026) excluded COACH420 from its own paper because "the vast majority of COACH420 systems were
+already present in the PLINDER training data" — a published leakage finding against a 309,140-system training set.
+That is a reason to check our own, so here it is, by direct PDB id against `data/processed/manifest.csv` (1499
+entries):
+
+| benchmark | entries | share also in our manifest |
+|---|---|---|
+| COACH420 | 420 | 6 (1.4 %) |
+| HOLO4K | 4009 | 73 (1.8 %) |
+| LIGYSIS | 3376 | 17 (0.5 %) |
+| CryptoBench | 1107 | 5 (0.5 %) |
+
+Every one of those structures already falls in the `train-similar` row, which the 30 %-identity cluster rule puts
+there regardless of identity, so the headline row — structures *not* similar to our training manifest — is unaffected.
+The risk the finding describes is real for anyone training at PLINDER scale; at our scale it is not what limits us.
+
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
 The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run
