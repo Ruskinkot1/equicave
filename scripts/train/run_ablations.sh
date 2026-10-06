@@ -98,5 +98,14 @@ done <<< "$PLAN"
 
 echo
 echo "$done_n trained, $skip_n already present, $fail_n failed"
-$PY scripts/train/collect_ablations.py --runs "$OUT" --out docs/results/ablations.md || \
-  echo "collect_ablations.py failed; the runs are in $OUT"
+# The table lands beside the runs it was built from, not in docs/results: a two-arm smoke would otherwise
+# overwrite a published grid with its own "not run" rows, and nothing would say so. PUBLISH=1 asks for that copy.
+TABLE="$OUT/ablations.md"
+$PY scripts/train/collect_ablations.py --runs "$OUT" --out "$TABLE" || \
+  { echo "collect_ablations.py failed; the runs are in $OUT"; exit 0; }
+echo "table: $TABLE"
+if [[ "${PUBLISH:-0}" == "1" ]]; then
+  cp "$TABLE" docs/results/ablations.md && echo "published to docs/results/ablations.md"
+else
+  echo "PUBLISH=1 to copy it to docs/results/ablations.md (only do that for a grid you would quote)"
+fi
