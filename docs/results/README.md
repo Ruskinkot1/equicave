@@ -184,6 +184,17 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**Telling the ranker how each candidate compares with its best competitor does nothing** (measured 2026-10-06).
+This was the cheap version of the idea behind the network's site decoder: besides the within-structure z-score of
+every feature, give the ranker its **margin** -- the value minus the best value among the *other* candidates of the
+same structure, 96 columns instead of 64. Out of fold on 1367 structures the result is 0.7286 against 0.7323, a
+paired cluster bootstrap of **-0.0037 [-0.0163, +0.0088]**: indistinguishable from zero, and this time it does not
+even win in cross-validation before failing to transfer.
+
+It does not refute the decoder, which lets every site attend to every other and compute an arbitrary function of
+the list, where this gives a fixed per-feature comparison with a single competitor. But it does say that the
+comparison has to be *learned over the list* to be worth anything, and it lowers the prior on the decoder helping.
+
 **Combining the detector's score with the ranker's does not help either, and this one nearly fooled us**
 (measured 2026-10-06). Swept directly on COACH420, a blend of the two within-structure z-scores peaks at
 0.721 against the ranker's 0.698 at a weight of 0.75 -- a tempting +0.023. Selected the honest way instead, on the
