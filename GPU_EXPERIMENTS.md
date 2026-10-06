@@ -1,8 +1,33 @@
 # Running the network experiments on one A100
 
-The network has **never been trained**. Everything below is therefore a first baseline plus the arms that judge
-four new mechanisms. The CPU side (candidates, ranker, per-point model, benchmarks) is already measured and is not
-repeated here; see `RUN.md` for that.
+The network **has** been trained once, and its ablation is what this guide is now organised around: cavity probes
+cost 0.263 site top-1 when removed, while degree-2 channels (−0.006), chirality (+0.000), ESM-2 650M (−0.010) and
+the surface module (−0.011) are all inside seed noise. So the arms below are ordered by what that measurement
+makes worth an A100 hour, and the first one tests the newest change rather than the oldest claim. The CPU side
+(candidates, ranker, per-point model, benchmarks) is already measured and is not repeated here; see `RUN.md`.
+
+## The short answer
+
+```bash
+micromamba create -y -f training/environment.yml && micromamba activate equicave && pip install -e .
+PYTHONPATH=src:. python -m pytest tests -q                       # must be green before booking hours
+python -c "import torch; print(torch.cuda.get_device_name(0))"
+
+rm -rf data/cache/net          # REQUIRED on a checkout older than the probe-placement change, see below
+python -m training pockets-net --set data.limit=8 optim.epochs=1 --out runs/smoke --device cuda   # ~10 min
+
+for s in 0 1 2; do python -m training pockets-net --set ablation=full optim.seed=$s split.val_fold=0     --out runs/base --device cuda; done
+```
+
+`--set ablation=<arm>` is how every arm below is selected; the arms live in `training/configs/ablations.yaml` (31 of
+them) and `--set key=value` overrides any config key directly. `--device cuda` is explicit; without it the device is
+auto-detected.
+
+**The cache will stop you, on purpose.** Probe placement moved from random-within-tiers to the learned per-point
+model, which changes the arrays, and the cache is keyed by PDB id alone. The settings that produce it are pinned in
+`<cache>/.featurisation.json` and a mismatch raises, naming the fields that differ, rather than silently serving the
+old featurisation and measuring the previous architecture. Delete the directory, or point `data.cache_dir` at a new
+one. Arms that change featurisation (`probe_tiered`, `lean`, anything touching `data.*`) each want their own cache.
 
 Before anything, two facts that decide how to read every number you get:
 
@@ -53,7 +78,47 @@ code; if the first seed takes more than 6 h, halve `optim.epochs` and say so in 
 ordering on the training manifest — stop and debug. Every arm below is a difference against this baseline and is
 uninterpretable if the baseline is broken.
 
-## 2. The four new mechanisms, each as a removal
+## 1b. The site decoder, which is the change this guide now exists for
+
+The newest architecture change answers a measured failure: where our first prediction is wrong the right candidate
+is **second in 24 of 53** cases and inside the first five in 41 of 53, while 34 of 53 first predictions are more
+than 8 A from the ligand, so they are a different pocket rather than a near miss. Until now every head was per
+node, so nothing in the model could represent "this pocket, not that one". `SiteDecoder` forms the site list by the
+evaluation's own rule, lets the sites attend to one another, and is trained with a listwise term plus a hinge on the
+one comparison top-1 decides. See `docs/ARCHITECTURE.md`, Stage 2c.
+
+**Run these before anything else below**: if `no_site_decoder` matches `full`, the diagnosis was wrong and nothing
+else here matters as much.
+
+```bash
+for arm in no_site_decoder no_site_margin no_site_rank site_layers_4 probe_flow; do
+  for s in 0 1 2; do
+    python -m training pockets-net --set ablation=$arm optim.seed=$s split.val_fold=0 \
+        --out runs/abl --device cuda
+  done
+done
+```
+
+| arm | what it removes | what a null result would mean |
+|---|---|---|
+| `no_site_decoder` | the whole decoder; back to per-probe confidence | pocket-against-pocket comparison was not the missing piece |
+| `no_site_margin` | the hinge on best-wrong against best-right | the listwise term already covers the decision top-1 makes |
+| `no_site_rank` | the listwise term over sites, keeping the hinge | one comparison is enough and the list adds nothing |
+| `site_layers_4` | nothing; doubles the competition depth | two layers were already enough |
+| `probe_flow` | nothing; probes walk along the direction head instead of jumping to the centre | the single jump was not the limit |
+
+Also worth an hour each, because the measurement argues for them:
+
+```bash
+# probe placement -- the comparison arm for the only component with a large effect. Needs its own cache.
+python -m training pockets-net --set ablation=probe_tiered data.cache_dir=data/cache/net_tiered \
+    optim.seed=0 split.val_fold=0 --out runs/abl --device cuda
+# everything the ablation found inert removed, the saving spent on depth and probes. Its own cache too.
+python -m training pockets-net --set ablation=lean data.cache_dir=data/cache/net_lean \
+    optim.seed=0 split.val_fold=0 --out runs/abl --device cuda
+```
+
+## 2. The four older mechanisms, each as a removal
 
 Each arm is the full model minus one thing, so the baseline is the configuration that ships.
 
@@ -120,7 +185,7 @@ counts:
 # (a) the network ranking candidates by itself, with no gradient-boosted model involved
 python scripts/eval/evaluate.py --set coach420 --net runs/base/full_fold0_seed0/model.pt --jobs 8
 
-# (b) the network's 45 out-of-fold features added to the ranker
+# (b) the network's 47 out-of-fold features added to the ranker (net_site_score among them)
 python scripts/train/train_ranker.py --tag native3 --features-extra net --seeds 5 --ablate \
     --model models/ranker_net.txt
 python scripts/eval/evaluate.py --set coach420 --ranker models/ranker_net.txt --jobs 8
