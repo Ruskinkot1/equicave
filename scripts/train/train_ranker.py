@@ -255,6 +255,9 @@ def main():
     ap.add_argument("--set-epochs", type=int, default=40)
     ap.add_argument("--stack", action="store_true", help="logistic regression over the model ranks (real stacking)")
     ap.add_argument("--search", type=int, default=0, help="nested random hyperparameter search of N draws")
+    ap.add_argument("--save-oof", default="", help="write the out-of-fold seed-ensemble score per candidate to this "
+                    "CSV, with the detector's own score beside it. Anything that combines the two must choose its "
+                    "weight on these, not on a benchmark, which is the whole point of writing them out.")
     a = ap.parse_args()
     ds = pathlib.Path(a.ds)
     df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
@@ -341,6 +344,13 @@ def main():
     seed_scores = [cv_scores(df, feats, sd) for sd in range(a.seeds)]
     per_method[main_name] = [evaluate(df, s) for s in seed_scores]
     ens = np.mean(seed_scores, axis=0)
+    if a.save_oof:
+        keep = ["pdb", "center", "label", "n_sites", "cluster30", "fold", "nat_score", "nat_rank"]
+        oof = df[[c for c in keep if c in df]].copy()
+        oof["ranker_oof"] = ens
+        pathlib.Path(a.save_oof).parent.mkdir(parents=True, exist_ok=True)
+        oof.to_csv(a.save_oof, index=False)
+        print(f"out-of-fold scores for {len(oof)} candidates -> {a.save_oof}")
     per_method[f"{main_name}, seed ensemble"] = [evaluate(df, ens)]
     prob, calib = calibrate(df, ens)
     per_method[f"{main_name}, calibrated"] = [evaluate(df, prob)]

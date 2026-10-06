@@ -184,6 +184,13 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**Giving the ranker fewer candidates to choose from does not help** (measured 2026-10-06 on the 179 COACH420
+structures not similar to our training set). The reasoning was that we hand the ranker 30 candidates where P2Rank
+emits 9.6, so most of what it sees is a distractor, and the top-1 decision might be easier over a shorter list.
+Restricting it to the detector's own top-k reaches 0.659 at k = 5, 0.687 at k = 8 and 10, and 0.698 from k = 15
+upward, which is exactly the unrestricted number -- so truncation never wins and only costs ceiling (0.872 at
+k = 5 against 0.989). The candidates the ranker does not need are not the ones it is getting wrong.
+
 **Moving a candidate's centre cannot fix a wrong first prediction** (measured 2026-10-04). Of the 53 non-train-similar
 COACH420 structures whose first prediction is wrong, 4 are within 5 A of the ligand and 34 are more than 8 A away:
 the first prediction is usually a different pocket, not a near miss. This is the second negative result for
