@@ -52,3 +52,16 @@ ablations:
     data.esm: null
     model.layers: 7
     data.n_probe: 1024
+  # Capacity. Every reduction measured so far came out neutral or slightly positive -- no_tensors 0.849, no_esm
+  # 0.853, no_surface 0.854 against full's 0.843 -- so the prior is that 4.39 M parameters is already past what
+  # 1367 structures in 1017 clusters can use, and these arms exist to confirm or refute that rather than to be
+  # assumed. Read them together with `scale_max` below: if capacity only pays at more data, that is the finding.
+  wide: {model.dim: 192}                            # 9.8 M parameters, 2.2x
+  deep: {model.layers: 8}                           # 6.7 M, 1.5x
+  big: {model.dim: 192, model.layers: 8}            # 14.8 M, 3.4x
+  small: {model.dim: 96, model.layers: 4}           # the other direction, which the ablation suggests may be free
+  # Data, which is the lever the measurements actually point at. The ranker saturated at 8x data (+0.008 top-1)
+  # but the network has never been trained on more than the small manifest even once. Needs its own cache, which
+  # run_ablations.sh gives it automatically because the arm touches data.*.
+  scale_max: {data.manifest: data/processed/manifest_max.csv}
+  scale_max_big: {data.manifest: data/processed/manifest_max.csv, model.dim: 192, model.layers: 8}

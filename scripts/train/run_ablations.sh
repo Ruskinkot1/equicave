@@ -49,6 +49,8 @@ GROUPS = {
     "equivariance": ["invariant_frames", "invariant_blind", "no_tensors_matched", "no_vectors_matched",
                      "e3nn_l1", "e3nn_l2", "e3nn_l3"],
     "mechanisms":   ["no_direction_loss", "no_listwise", "single_stage", "no_probe_potential"],
+    "capacity":     ["small", "deep", "wide", "big"],
+    "scale":        ["scale_max", "scale_max_big"],
 }
 known = set(cfg)
 if arms_arg.strip():
@@ -57,7 +59,8 @@ if arms_arg.strip():
     if missing:
         sys.exit(f"unknown arm(s): {' '.join(missing)}; see training/configs/ablations.yaml")
 elif group == "all":
-    ordered = [a for g in ("decoder", "probes", "equivariance", "mechanisms") for a in GROUPS[g] if a in known]
+    ordered = [a for g in ("decoder", "probes", "capacity", "scale", "equivariance", "mechanisms")
+               for a in GROUPS[g] if a in known]
     arms = ["full"] + ordered + [a for a in cfg if a not in ordered and a != "full"]
 elif group in GROUPS:
     arms = ["full"] + [a for a in GROUPS[group] if a in known]
