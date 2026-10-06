@@ -53,7 +53,12 @@ FEATURES = NATIVE + GEOMETRY + CHEMISTRY + SHELL + POTENTIAL + CONTEXT
 NET_FEATURES = (["net_seg", "net_center_conf", "net_hot_mean", "net_n_centers", "net_center_dist"]
                 + [f"net_{k}_{r}" for r in (4, 8) for k in ("occ_mean", "occ_max", "conf_mean", "conf_max",
                                                             "offset_mean", "n_probes")]
-                + [f"net_hot{j}_{s}_{r}" for r in (4, 8) for j in range(7) for s in ("mean", "max")])
+                + [f"net_hot{j}_{s}_{r}" for r in (4, 8) for j in range(7) for s in ("mean", "max")]
+                # The site decoder's own score for the site this candidate belongs to, and how far that site is.
+                # Every other column here summarises one pocket; this is the only one that holds a comparison
+                # between pockets, which is what the ranker could never see. Both are absent for a checkpoint
+                # trained without the decoder, like every other optional network column.
+                + ["net_site_score", "net_site_dist"])
 PEPTIDE = ["pep_tier", "pep_length", "pep_width", "pep_anisotropy", "pep_flatness", "pep_bb_n", "pep_bb_o", "pep_bb_ca",
            "pep_sc_c", "pep_sc_polar", "pep_bb_total", "pep_bb_ratio", "pep_bb_per_point", "pep_overlap_dist"]
 # Aggregates of the learned per-point ligandability score (equicave.point_score.POINT). Optional like the network
