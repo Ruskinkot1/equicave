@@ -17,11 +17,13 @@ data:
   # that saw its ligands. `tiered` is the previous behaviour and the comparison arm.
   probe_sampling: ligandable   # ligandable | tiered
   point_model_tag: native      # which models/point_<tag>_fold*.txt to place probes with
-  # Fraction of the probe budget placed by score; the rest keeps the tiered random order. Measured on one structure:
-  # at 1.0 only 0.4 % of probes sit more than 8 A from a ligand, so the site head has almost nothing to reject; at
-  # 0.5 a third of the probes are occupied and a third are far negatives. `occ_pos_weight` below was chosen for the
-  # 18 % positive rate of random placement and is deliberately left unchanged, so this arm isolates placement and
-  # not class weighting -- retune it separately once placement is settled.
+  # Fraction of the probe budget placed by score; the rest keeps the tiered random order. At 1.0 almost no probe
+  # sits far from a ligand, so the site head has nothing to reject.
+  # Measured on 19 structures at the shipped settings (2026-10-06): this placement gives an occupancy positive
+  # rate of **0.230**, against **0.133** for `tiered`. The balancing weights are therefore 3.3 and 6.5, so
+  # `occ_pos_weight: 3.0` below is right for this arm and **half of what `tiered` needs** -- which is why the
+  # `probe_tiered` arm sets its own, or the comparison between the two placements would be confounded with class
+  # weighting on the loss that the comparison is about.
   probe_ligandable_frac: 0.5
 split:
   val_fold: 0                            # 5-fold CV by cluster: run once per fold
@@ -77,7 +79,7 @@ loss:
   w_site_margin: 0.5         # the single comparison top-1 decides: best correct site against best incorrect one
   site_margin: 1.0           # how far apart in logits that comparison must come out
   w_prop: 0.5
-  occ_pos_weight: 3.0
+  occ_pos_weight: 3.0        # (1-p)/p for this arm's measured positive rate of 0.230; see data.probe_ligandable_frac
   res_pos_weight: 3.0
 stages:
   # P6 staged training. Stage 1 converges the dense per-node heads with the sparse ranking terms switched off, then

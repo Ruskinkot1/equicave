@@ -21,7 +21,10 @@ ablations:
   no_tensors_matched: {model.use_tensors: false, model.match_params: full}
   no_vectors_matched: {model.use_vectors: false, model.invariant_mode: frames, model.match_params: full}
   # Probe placement: the comparison arm for the only component the first trained ablation found to matter.
-  probe_tiered: {data.probe_sampling: tiered}
+  # Random placement within buriedness tiers halves the occupancy positive rate (0.133 against 0.230, measured on
+  # 19 structures), so this arm carries its own balancing weight. At the default 3.0 it would be under-weighted
+  # twofold and the comparison would measure class weighting as much as placement.
+  probe_tiered: {data.probe_sampling: tiered, loss.occ_pos_weight: 6.5}
   # New mechanisms, each as a removal from the full model so the baseline is the one that ships.
   no_direction_loss: {loss.w_dir: 0.0}              # P12: the dense cosine target on every probe near one site
   no_listwise: {loss.w_listwise: 0.0}               # P2: the only term that orders probes within a structure

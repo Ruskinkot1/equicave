@@ -184,6 +184,21 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**The probe-placement ablation was weighted for the wrong arm** (measured and fixed 2026-10-06). The occupancy
+loss carries a positive-class weight, and the plan said to retune it "once placement is settled" because learned
+placement was expected to raise the positive rate. Measured directly on 19 structures at the shipped settings:
+
+| probe placement | occupancy positive rate | balancing weight (1-p)/p |
+|---|---|---|
+| `ligandable` (the default) | 0.230 | 3.34 |
+| `tiered` (the comparison arm) | 0.133 | 6.49 |
+
+So the shipped `occ_pos_weight: 3.0` is right for the default arm and **half of what the comparison arm needs**.
+Run as it stood, `probe_tiered` would have been handicapped by a class weight tuned for its opponent, and the one
+component with a large measured effect (+0.263) would have been compared against a deliberately under-weighted
+baseline. The arm now carries its own weight. The worry in the plan was real but pointed the wrong way: the rate
+did not rise to a third under learned placement, it is the *random* placement that is the sparse one.
+
 **Telling the ranker how each candidate compares with its best competitor does nothing** (measured 2026-10-06).
 This was the cheap version of the idea behind the network's site decoder: besides the within-structure z-score of
 every feature, give the ranker its **margin** -- the value minus the best value among the *other* candidates of the
