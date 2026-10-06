@@ -94,6 +94,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=900, help="seconds per structure")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-resume", dest="resume", action="store_false")
+    ap.add_argument("--shard", default="", help="'i/n': take every n-th structure starting at i, so n processes can "
+                    "share the set. Their inference is single-threaded and the whole benchmark takes about 17 hours "
+                    "in one process; two shards halve that and change nothing about the method. Each shard writes "
+                    "its own chunk files, so they do not collide.")
     a = ap.parse_args()
     for name, val in (("repo", a.repo), ("python", a.python), ("models", a.models)):
         if not val:
@@ -113,12 +117,19 @@ def main():
                 d = pd.read_csv(f)
             except Exception:                            # noqa: BLE001 -- a batch interrupted mid-write
                 print(f"  unreadable chunk {f.name}; ignored"); continue
-            recs += d.to_dict("records"); seen |= set(d["pdb"]); part += 1
+            recs += d.to_dict("records"); seen |= set(d["pdb"])
+            part += f.name.startswith(f"part_s{a.shard.split(chr(47))[0]}_") if a.shard else 1
         if attempted.exists():
             seen |= {l.strip() for l in attempted.read_text().splitlines() if l.strip()}
         if seen:
             print(f"  resuming: {len(seen)} structures already done, {len(recs)} predictions kept")
     rows = [r for r in rows if r["pdb"] not in seen]
+    shard_tag = ""
+    if a.shard:
+        i, n = (int(x) for x in a.shard.split("/"))
+        rows = [r for k, r in enumerate(rows) if k % n == i]
+        shard_tag = f"s{i}_"
+        print(f"  shard {i} of {n}: {len(rows)} structures")
 
     by_id = {r["pdb"]: r for r in rows}
     tasks = []
@@ -160,11 +171,11 @@ def main():
                             dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
                             label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
             if len(batch_recs) >= 100:
-                pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{part:04d}.csv", index=False)
+                pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
                 part += 1; recs += batch_recs; batch_recs = []
             bar.update(1, postfix=f"{len(recs) + len(batch_recs)} predictions from {done} structures")
     if batch_recs:
-        pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{part:04d}.csv", index=False)
+        pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
         recs += batch_recs
 
     if not recs:
