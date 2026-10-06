@@ -184,6 +184,14 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**Combining the detector's score with the ranker's does not help either, and this one nearly fooled us**
+(measured 2026-10-06). Swept directly on COACH420, a blend of the two within-structure z-scores peaks at
+0.721 against the ranker's 0.698 at a weight of 0.75 -- a tempting +0.023. Selected the honest way instead, on the
+1367-structure out-of-fold cross-validation (`train_ranker.py --save-oof`), the best weight is **1.00**: the
+ranker alone, 0.7323, with every blend below it (0.7293 at 0.95, 0.7169 at 0.80, 0.6225 at 0.50). The benchmark
+peak was four structures of noise out of 179. The parameter is chosen on cross-validation and the benchmark is
+measured once, which is the only reason this was caught.
+
 **Giving the ranker fewer candidates to choose from does not help** (measured 2026-10-06 on the 179 COACH420
 structures not similar to our training set). The reasoning was that we hand the ranker 30 candidates where P2Rank
 emits 9.6, so most of what it sees is a distractor, and the top-1 decision might be easier over a shorter list.
