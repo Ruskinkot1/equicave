@@ -29,7 +29,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
-from equicave import ccd, detect, labels as LB, pocket_features as pf, pockets as pk, residues as resprops, structure
+from equicave import (ccd, detect, labels as LB, pocket_features as pf, pockets as pk, progress,
+                      residues as resprops, structure)
 
 RES = list("ACDEFGHIKLMNPQRSTVWY") + ["X"]
 ELEM = ["C", "N", "O", "S", "X"]
@@ -401,7 +402,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
         rows = rows[:limit]
     emb = Embedder(esm_name, device) if esm_name else None
     comps = sorted({l[0] for r in rows for l in json.loads(r["ligands"])})
-    entries = {c: ccd.load(c) for c in comps}
+    # Each component is one small download the first time it is seen; at full scale there are thousands of them.
+    entries = {c: ccd.load(c) for c in progress.track(comps, "chemical component definitions", unit="comp")}
 
     fold_models = {}
     if probe_sampling == "ligandable":
@@ -420,25 +422,25 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
         log(f"probe placement by ligandability, out of fold, from models/point_{tag}_fold*.txt")
 
     done = []
-    for i, r in enumerate(rows, 1):
-        f = out_dir / f"{r['pdb']}.npz"; p = pdb_dir / f"{r['pdb']}.pdb"
-        if f.exists():
-            done.append(r["pdb"]); continue
-        if not p.exists():
-            continue
-        try:
-            st = structure.read_pdb(p); rt = structure.residue_table(st)
-            e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
-            d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
-                          druglike_only=druglike_only, require_interaction=require_interaction,
-                          residue_chemistry=residue_chemistry, probe_potential=probe_potential,
-                          probe_model=fold_models.get(int(r["fold"])),
-                          probe_ligandable_frac=probe_ligandable_frac)
-            if d is not None and "y_res" in d:
-                d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
-                save(d, f); done.append(r["pdb"])
-        except Exception as ex:  # noqa: BLE001
-            log(f"  {r['pdb']}: {type(ex).__name__}: {ex}")
-        if i % 50 == 0:
-            log(f"  cached {len(done)}/{i}")
+    with progress.Bar("featurising the network cache", len(rows), unit="pdb") as bar:
+        for r in rows:
+            f = out_dir / f"{r['pdb']}.npz"; p = pdb_dir / f"{r['pdb']}.pdb"
+            if f.exists():
+                done.append(r["pdb"]); bar.update(1, postfix=f"{len(done)} cached"); continue
+            if not p.exists():
+                bar.update(1, postfix=f"{len(done)} cached, {r['pdb']} has no pdb file"); continue
+            try:
+                st = structure.read_pdb(p); rt = structure.residue_table(st)
+                e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
+                d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
+                              druglike_only=druglike_only, require_interaction=require_interaction,
+                              residue_chemistry=residue_chemistry, probe_potential=probe_potential,
+                              probe_model=fold_models.get(int(r["fold"])),
+                              probe_ligandable_frac=probe_ligandable_frac)
+                if d is not None and "y_res" in d:
+                    d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
+                    save(d, f); done.append(r["pdb"])
+            except Exception as ex:  # noqa: BLE001
+                log(f"  {r['pdb']}: {type(ex).__name__}: {ex}")
+            bar.update(1, postfix=f"{len(done)} cached")
     return done

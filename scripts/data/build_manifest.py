@@ -14,6 +14,7 @@ import argparse, csv, hashlib, json, pathlib, random, sys, time, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
+from equicave import progress  # noqa: E402
 from equicave.targets import TARGETS  # noqa: E402
 
 EXCLUDE = set("""HOH DOD WAT NA K CL BR IOD F MG CA ZN MN FE FE2 CU CU1 NI CO CD HG PT AU SR BA CS LI RB SO4 PO4 SO3 NO3 NH4 CO3
@@ -52,13 +53,23 @@ def search_ids(max_res):
     return [x["identifier"] for x in post(SEARCH, q)["result_set"]]
 
 
-def info(ids):
+def info(ids, desc=""):
+    """Entry metadata from the GraphQL endpoint, 100 ids per request. Minutes at full scale, so it reports.
+
+    `desc=None` silences the bar, for callers that batch the ids themselves and report their own total.
+    """
     out = {}
+    bar = progress.Bar(desc or f"metadata for {len(ids)} entries", len(ids), unit="entry") if desc is not None else None
     for i in range(0, len(ids), 100):
-        d = post(GQL, {"query": "{ entries(entry_ids:%s) { %s } }" % (json.dumps(ids[i:i + 100]), FIELDS)})
+        chunk = ids[i:i + 100]
+        d = post(GQL, {"query": "{ entries(entry_ids:%s) { %s } }" % (json.dumps(chunk), FIELDS)})
         for e in (d.get("data") or {}).get("entries") or []:
             if e:
                 out[e["rcsb_id"]] = e
+        if bar is not None:
+            bar.update(len(chunk), postfix=f"{len(out)} resolved")
+    if bar is not None:
+        bar.close()
     return out
 
 
@@ -102,7 +113,7 @@ def main():
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     rnd = random.Random(a.seed)
 
-    tinfo = info([t["pdb"] for t in TARGETS.values()])
+    tinfo = info([t["pdb"] for t in TARGETS.values()], desc="metadata for the held-out targets")
     held = {}
     for name, t in TARGETS.items():
         e = tinfo.get(t["pdb"], {})
@@ -115,7 +126,7 @@ def main():
     print(f"{len(ids)} entries match the RCSB query", flush=True)
     rnd.shuffle(ids)
     rows, per, dropped = [], {}, dict(no_ligand_or_cluster=0, target_family=0, cluster_cap=0)
-    for e in info(ids[:a.n]).values():
+    for e in info(ids[:a.n], desc=f"metadata for {min(a.n, len(ids))} candidate entries").values():
         s = summarize(e)
         if s is None:
             dropped["no_ligand_or_cluster"] += 1; continue

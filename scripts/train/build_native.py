@@ -27,7 +27,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-from equicave import detect, pocket_features as pf, pockets as pk, structure, tables  # noqa: E402
+from equicave import detect, pocket_features as pf, pockets as pk, progress, structure, tables  # noqa: E402
 
 
 def n_sites(copies, link=8.0):
@@ -147,15 +147,16 @@ def main():
             pd.DataFrame(pending_s).to_csv(chunk_dir / f"summary_{part:04d}.csv", index=False)
             part += 1; pending, pending_s = [], []
 
-    with ProcessPoolExecutor(a.jobs) as ex:
+    n_ok = n_hit = n_cand = 0                       # running, so the postfix costs nothing per structure
+    with ProcessPoolExecutor(a.jobs) as ex, progress.Bar("featurising candidates", len(tasks), unit="pdb") as bar:
         for i, (rr, s) in enumerate(ex.map(one, tasks, chunksize=2), 1):
             rows += rr; summ.append(s); pending += rr; pending_s.append(s)
             if a.chunk and i % a.chunk == 0:
                 flush()
-            if i % 100 == 0:
-                ok = [x for x in summ if x["status"] == "ok"]
-                if ok:
-                    print(f"  {i}: ceiling so far {np.mean([x['hit'] for x in ok]):.3f}, mean cands {np.mean([x['n_cands'] for x in ok]):.1f}", flush=True)
+            if s["status"] == "ok":
+                n_ok += 1; n_hit += s["hit"]; n_cand += s["n_cands"]
+            bar.update(1, postfix=(f"ceiling {n_hit / n_ok:.3f}, {n_cand / n_ok:.1f} cands/pdb"
+                                   if n_ok else "no candidates yet"))
     flush()
     df = pd.concat(prev_rows + [pd.DataFrame(rows)], ignore_index=True) if (prev_rows or rows) else pd.DataFrame()
     sm = pd.concat(prev_summ + [pd.DataFrame(summ)], ignore_index=True) if (prev_summ or summ) else pd.DataFrame()

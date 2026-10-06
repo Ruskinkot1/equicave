@@ -50,6 +50,14 @@ while the log claimed the new one. The settings that change the arrays are now p
 `<cache>/.featurisation.json` and a mismatch stops the run naming the fields that differ: delete the directory to
 rebuild, or point `data.cache_dir` at a new one. Each arm that changes featurisation wants its own cache.
 
+**Progress.** Every loop that takes more than a moment reports: the structure downloads, the RCSB metadata
+queries, the CCD downloads, candidate and per-point featurisation, the network cache, each training epoch and each
+benchmark. On a terminal it is a `tqdm` bar with the loop's own running numbers in it (the candidate ceiling so far,
+the positive rate of the point table, the epoch's mean loss); piped to a log file it becomes one plain line every
+30 seconds, because a redrawn bar in a file is unreadable. `EQUICAVE_PROGRESS=bar|plain|off` forces one of the
+three — `bar` is worth setting under `tee`, where stderr may not look like a terminal. `tqdm` is a soft dependency:
+without it the plain lines are used everywhere.
+
 Two measured facts to keep in mind while reading whatever it produces, both of which cost this project a day:
 
 * **Cross-validated top-1 on our manifest does not predict benchmark top-1.** Three feature sets ranked in the

@@ -66,6 +66,7 @@ printf 'free disk: %s\n' "$(df -h . | awk 'NR==2{print $4}')"
 if has deps; then
   say "0. environment and tests"
   $PY -c "import numpy, scipy, pandas, lightgbm, sklearn; print('cpu stack ok')"
+  $PY -c "import tqdm; print('tqdm', tqdm.__version__)" || echo "tqdm missing: progress falls back to plain lines"
   $PY -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())" || echo "torch missing: network stages unavailable"
   $PY -m pytest tests -q -x
 fi

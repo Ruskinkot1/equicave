@@ -13,7 +13,11 @@ Output: data/external/eval_sets/<set>.csv with columns pdb, chain (may be empty)
 """
 import csv, io, json, pathlib, pickle, sys, urllib.request
 
-OUT = pathlib.Path(__file__).resolve().parents[2] / "data/external/eval_sets"
+REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "src"))
+from equicave import progress  # noqa: E402
+
+OUT = REPO / "data/external/eval_sets"
 P2 = "https://raw.githubusercontent.com/rdk/p2rank-datasets/master/"
 SOURCES = dict(coach420=P2 + "coach420.ds", coach420_mlig=P2 + "coach420(mlig).ds", holo4k=P2 + "holo4k.ds", holo4k_mlig=P2 + "holo4k(mlig).ds")
 LIGYSIS_API = "https://zenodo.org/api/records/13121414"
@@ -149,7 +153,7 @@ def write_cryptobench(status: dict):
 
 def main():
     status = {}
-    for name, url in SOURCES.items():
+    for name, url in progress.track(sorted(SOURCES.items()), "benchmark id lists", len(SOURCES), unit="set"):
         try:
             write(name, parse_ds(get(url).decode()), url); status[name] = "ok"
         except Exception as ex:  # noqa: BLE001

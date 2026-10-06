@@ -37,7 +37,8 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO)); sys.path.insert(0, str(REPO / "scripts/data"))
-from equicave import detect, labels as LB, metrics as M, pocket_features as pf, pockets as pk, structure, superpose as SP, targets  # noqa: E402
+from equicave import (detect, labels as LB, metrics as M, pocket_features as pf, pockets as pk, progress,  # noqa: E402
+                      structure, superpose as SP, targets)
 from build_manifest import EXCLUDE, info, groups  # noqa: E402
 
 EXT = REPO / "data/external/eval_sets"; RAW = REPO / "data/external/pdb"
@@ -241,17 +242,20 @@ def main():
     print(f"{a.set}: {len(rows)} entries", flush=True)
     ids = sorted({r["pdb"] for r in rows})
     meta = {}
-    for i in range(0, len(ids), 200):
-        try:
-            for k, e in info(ids[i:i + 200]).items():
-                meta[k] = dict(cluster30=groups(e, "sequence_identity", 30.0), uniprot=groups(e, "matching_uniprot_accession"))
-        except Exception as ex:  # noqa: BLE001
-            print(f"  RCSB metadata failed for a batch: {ex}")
+    with progress.Bar("RCSB metadata", len(ids), unit="entry") as bar:
+        for i in range(0, len(ids), 200):
+            try:
+                for k, e in info(ids[i:i + 200], desc=None).items():   # the outer bar reports the whole set
+                    meta[k] = dict(cluster30=groups(e, "sequence_identity", 30.0), uniprot=groups(e, "matching_uniprot_accession"))
+            except Exception as ex:  # noqa: BLE001
+                print(f"  RCSB metadata failed for a batch: {ex}")
+            bar.update(len(ids[i:i + 200]), postfix=f"{len(meta)} resolved")
     train_cl = {r["cluster30"] for r in csv.DictReader(open(REPO / "data/processed/manifest.csv"))} if (REPO / "data/processed/manifest.csv").exists() else set()
     args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag, point_model=a.point_model,
                 receptor_chains=a.receptor_chains)
+    tasks = [(r, r.get("chain", ""), args) for r in rows]
     with ProcessPoolExecutor(a.jobs) as ex:
-        res = list(ex.map(one, [(r, r.get("chain", ""), args) for r in rows], chunksize=2))
+        res = list(progress.track(ex.map(one, tasks, chunksize=2), f"predicting on {a.set}", len(tasks), unit="pdb"))
     summ = pd.DataFrame([s for s, _ in res]); cand = pd.DataFrame([c for _, cs in res for c in cs])
     if cand.empty:
         sys.exit("no predictions")

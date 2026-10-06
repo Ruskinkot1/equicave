@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from equicave import progress
 from training.common.config import load_config, pick_device, run_dir, seed_all, write_model_card
 from training.pockets import data as D
 from training.pockets import model as M
@@ -304,20 +305,25 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         if ep < stage1:
             for k in st.get("stage1_zero", []):
                 lw[k] = 0.0
-        model.train(); t0 = time.time(); order = rng.permutation(len(files_tr)); agg = {}
-        for i, j in enumerate(order):
-            b = D.to_torch(D.load(files_tr[j]), device)
-            if cfg["optim"]["rotate"]:
-                b = D.random_rotation(b, rng)
-            b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
-            b, pot_mask, pot_target = D.mask_probe_potential(b, cfg["loss"].get("pot_mask_frac", 0.2), rng)
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                out = model(b); total, parts = losses(out, b, lw, res_mask, pot_mask, pot_target)
-            (total / acc).backward()
-            for k, v in parts.items():
-                agg[k] = agg.get(k, 0) + v / len(order)
-            if (i + 1) % acc == 0 or i == len(order) - 1:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); opt.zero_grad(); sched.step(); ema.update(model)
+        model.train(); t0 = time.time(); order = rng.permutation(len(files_tr)); agg = {}; run = 0.0
+        # An epoch is one pass over every cached structure — hours at full scale, so it reports inside the epoch
+        # rather than only in the one line at the end of it.
+        with progress.Bar(f"epoch {ep + 1}/{E}", len(order), unit="struct") as bar:
+            for i, j in enumerate(order):
+                b = D.to_torch(D.load(files_tr[j]), device)
+                if cfg["optim"]["rotate"]:
+                    b = D.random_rotation(b, rng)
+                b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
+                b, pot_mask, pot_target = D.mask_probe_potential(b, cfg["loss"].get("pot_mask_frac", 0.2), rng)
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    out = model(b); total, parts = losses(out, b, lw, res_mask, pot_mask, pot_target)
+                (total / acc).backward()
+                for k, v in parts.items():
+                    agg[k] = agg.get(k, 0) + v / len(order)
+                if (i + 1) % acc == 0 or i == len(order) - 1:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); opt.zero_grad(); sched.step(); ema.update(model)
+                run += float(sum(parts.values()))    # parts hold floats already, so no device sync here
+                bar.update(1, postfix=f"loss {run / (i + 1):.3f}")
         ev = evaluate(ema.shadow, files_va, device, cfg) if files_va else dict(val_score=float("nan"))
         history.append(dict(epoch=ep + 1, train=agg, val=ev, seconds=round(time.time() - t0, 1)))
         log(f"epoch {ep + 1}/{E} loss {sum(agg.values()):.3f} {json.dumps({k: round(v, 3) for k, v in agg.items()})} | val occ_ap {ev.get('occ_ap', float('nan')):.3f} res_ap {ev.get('res_ap', float('nan')):.3f} "

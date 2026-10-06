@@ -25,7 +25,7 @@ from scipy.spatial import cKDTree
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-from equicave import detect, labels as LB, point_score as ps, structure, tables  # noqa: E402
+from equicave import detect, labels as LB, point_score as ps, progress, structure, tables  # noqa: E402
 
 
 def one(task):
@@ -105,14 +105,15 @@ def main():
         tasks.append((r["pdb"], str(p), codes, dict(cluster30=r["cluster30"], fold=int(r["fold"])), params))
     print(f"{len(tasks)} structures to process ({len(man)} in the manifest, {len(done)} already in chunks)", flush=True)
     buf, summ, part = [], [], len(list(chunks.glob("part_*.csv")))
-    with ProcessPoolExecutor(a.jobs) as ex:
+    n_pts = n_p = 0                                 # running totals, so the progress postfix stays O(1)
+    with ProcessPoolExecutor(a.jobs) as ex, progress.Bar("per-point features", len(tasks), unit="pdb") as bar:
         for k, (rows, s) in enumerate(ex.map(one, tasks, chunksize=1), 1):
             buf += rows; summ.append(s)
+            if s["status"] == "ok":
+                n_pts += s["n_points"]; n_p += s["n_pos"]
             if a.chunk and k % a.chunk == 0:
                 pd.DataFrame(buf).to_csv(chunks / f"part_{part:04d}.csv", index=False); part += 1; buf = []
-                ok = [x for x in summ if x["status"] == "ok"]
-                print(f"  {k}: {sum(x['n_points'] for x in ok)} points, "
-                      f"{sum(x['n_pos'] for x in ok) / max(1, sum(x['n_points'] for x in ok)):.3f} positive", flush=True)
+            bar.update(1, postfix=f"{n_pts} points, {n_p / max(1, n_pts):.3f} positive")
     if buf:
         pd.DataFrame(buf).to_csv(chunks / f"part_{part:04d}.csv", index=False)
     # Written part by part: the largest manifest yields about twenty million rows, and concatenating those into one
