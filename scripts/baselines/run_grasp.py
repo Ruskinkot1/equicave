@@ -21,7 +21,9 @@ Four deviations from their pinned environment, recorded because they are ours an
 The first two could in principle change their features; the comparison is reported with that stated.
 
 Usage: GRASP_REPO=/path/to/GrASP python scripts/baselines/run_grasp.py --set coach420 [--limit N] [--jobs 4]
-Output: data/processed/candidates_grasp_<set>.csv.gz, in the same layout as the other baseline tables.
+Output: data/processed/candidates_grasp_<set>.csv.gz, in the same layout as the other baseline tables. Results are
+written batch by batch into data/processed/grasp_<set>_chunks/ and a re-run resumes from them (--no-resume to start
+over), because a full set is hours of inference and the first attempt was lost to an interruption.
 """
 import argparse, csv, json, os, pathlib, shutil, subprocess, sys
 
@@ -30,7 +32,7 @@ import pandas as pd
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/eval"))
-from equicave import labels as LB, pockets as pk, structure, tables  # noqa: E402
+from equicave import labels as LB, pockets as pk, progress, structure, tables  # noqa: E402
 
 MODEL_DEFAULT = "train_full"       # GrASP's model trained on its full training set
 
@@ -130,6 +132,8 @@ def main():
     # costs a few seconds of start-up each and loses only the structure that actually fails.
     ap.add_argument("--batch", type=int, default=24); ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--no-resume", dest="resume", action="store_false",
+                    help="ignore the partial chunks of an earlier run and start the set again")
     a = ap.parse_args()
     if not a.repo:
         sys.exit("set GRASP_REPO or pass --repo: a checkout of https://github.com/tiwarylab/GrASP")
@@ -139,7 +143,30 @@ def main():
     rows = load_set(a.set, a.limit)
     print(f"{a.set}: {len(rows)} entries")
 
-    recs, done = [], 0
+    # Written batch by batch and resumed from what is there. A full set takes hours of inference inside their code,
+    # and a run that only writes its table at the end loses all of it to one interruption -- which is how the first
+    # COACH420 run was lost.
+    chunk_dir = REPO / "data/processed" / f"grasp_{a.set}_chunks"   # *_chunks is the gitignored convention
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    recs, seen, part = [], set(), 0
+    if a.resume:
+        for f in sorted(chunk_dir.glob("part_*.csv")):
+            try:
+                d = pd.read_csv(f)
+            except Exception:                                   # noqa: BLE001 -- a batch interrupted mid-write
+                print(f"  unreadable chunk {f.name}; ignored"); continue
+            recs += d.to_dict("records"); seen |= set(d["pdb"]); part += 1
+        attempted = chunk_dir / "attempted.txt"
+        if attempted.exists():
+            seen |= {l.strip() for l in attempted.read_text().splitlines() if l.strip()}
+        if seen:
+            print(f"  resuming: {len(seen)} structures already done, {len(recs)} predictions kept")
+    else:
+        attempted = chunk_dir / "attempted.txt"
+    rows = [r for r in rows if r["pdb"] not in seen]
+
+    done = 0
+    bar = progress.Bar(f"GrASP on {a.set}", len(rows), unit="pdb")
     for i in range(0, len(rows), a.batch):
         chunk = rows[i:i + a.batch]
         paths, keep = [], []
@@ -148,7 +175,8 @@ def main():
             if p is not None:
                 paths.append(p); keep.append(r)
         if not paths:
-            continue
+            bar.update(len(chunk), postfix=f"{len(recs)} predictions"); continue
+        batch_recs = []
         pred = predict_bisect(repo, paths, a.model, a.threshold, a.jobs)
         for r, path in zip(keep, paths):
             sites = pred.get(r["pdb"], [])
@@ -161,12 +189,21 @@ def main():
             site_atoms = [np.vstack([ligs[j]["xyz"] for j in g]) for g in groups]
             L = np.vstack([l["xyz"] for l in ligs])
             for rank, (centre, score) in enumerate(sites, 1):
-                recs.append(dict(pdb=r["pdb"], center=";".join(f"{x:.2f}" for x in centre),
-                                 tool_score=score, tool_rank=rank, tool_rel=score / max(1e-9, sites[0][1]),
-                                 dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
-                                 label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
+                batch_recs.append(dict(pdb=r["pdb"], center=";".join(f"{x:.2f}" for x in centre),
+                                       tool_score=score, tool_rank=rank, tool_rel=score / max(1e-9, sites[0][1]),
+                                       dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
+                                       label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
+        # Both halves of the batch's outcome are recorded: the predictions, and the ids attempted. Without the
+        # second a resumed run would retry every structure GrASP predicted nothing for, which on a set with many
+        # of those never finishes.
+        if batch_recs:
+            pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{part:04d}.csv", index=False); part += 1
+            recs += batch_recs
+        with open(attempted, "a") as fh:
+            fh.write("".join(f"{r['pdb']}\n" for r in keep))
         done += len(keep)
-        print(f"  {done}/{len(rows)} structures, {len(recs)} predictions", flush=True)
+        bar.update(len(chunk), postfix=f"{len(recs)} predictions from {done} structures")
+    bar.close()
 
     if not recs:
         sys.exit("GrASP produced no predictions")
