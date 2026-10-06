@@ -178,12 +178,21 @@ def main():
         pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
         recs += batch_recs
 
-    if not recs:
+    # The table is assembled from every chunk on disk, not from this process's own rows. With --shard each process
+    # holds only its share, and whichever finished last would otherwise overwrite the file with half the benchmark.
+    parts = sorted(chunk_dir.glob("part_*.csv"))
+    frames = []
+    for f in parts:
+        try:
+            frames.append(pd.read_csv(f))
+        except Exception:                                # noqa: BLE001 -- a chunk another shard is mid-write on
+            print(f"  unreadable chunk {f.name}; ignored")
+    if not frames:
         sys.exit("DeepSurf produced no predictions")
-    df = pd.DataFrame(recs)
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["pdb", "center"])
     tables.write_table(df, REPO / "data/processed", f"candidates_deepsurf_{a.set}")
     hit = df.groupby("pdb")["label"].max().mean()
-    print(f"{len(df)} predictions for {df.pdb.nunique()} structures; "
+    print(f"{len(df)} predictions for {df.pdb.nunique()} structures from {len(parts)} chunks; "
           f"mean {len(df) / df.pdb.nunique():.1f} per structure; ceiling {hit:.3f}")
 
 
