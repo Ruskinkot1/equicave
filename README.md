@@ -85,7 +85,7 @@ order is +0.275 top-1 [+0.228, +0.329] by paired cluster bootstrap.
 | fpocket own ranking | 0.391 | — |
 | P2Rank own ranking | 0.754 | — |
 | EquiCave + LambdaRank (118 features) | rebuilding | rebuilding |
-| EquiCave + network | not run (needs a GPU) | not run |
+| **EquiCave network alone** | **0.777** [0.716, 0.837] | **0.927** [0.889, 0.962] |
 
 ### COACH420 head-to-head, identical structures and identical receptors (`scripts/eval/compare_on_set.py`)
 174 structures predicted by both methods and not sharing a 30 %-identity cluster with our training manifest; both
@@ -99,7 +99,14 @@ the external tools.
 | EquiCave + ranker (236 features) | 30.0 | **0.989** | 0.642 | 0.726 | 0.855 |
 | EquiCave + ranker (272, + per-point) | 30.0 | **0.989** | 0.626 | 0.704 | 0.855 |
 | P2Rank 2.5.1 | 9.6 | 0.931 | 0.753 [0.688, 0.814] | 0.828 [0.771, 0.881] | 0.879 [0.830, 0.926] |
-| EquiCave + network | not run (needs a GPU) | | | | |
+| EquiCave network alone † | 30.0 | — | **0.777** [0.716, 0.837] | **0.804** [0.746, 0.862] | **0.927** [0.889, 0.962] |
+
+† The network's row is **not comparable to P2Rank's** and is marked so deliberately: it was produced on an older
+checkout under the single-chain receptor, while P2Rank is given the whole assembly. It *is* comparable to our own
+ranker rows measured under that same protocol, where the ranker reached 0.704 — so the network beats the
+gradient-boosted ranker by +0.073 top-1, and beats `ranker + network features` (0.704) by the same margin, which is
+the fourth consecutive case of feature stacking losing on a benchmark while winning in cross-validation. Re-running
+the network under the corrected receptor is the next measurement; until then no network-versus-P2Rank claim is made.
 
 Paired cluster bootstrap, our best model against P2Rank: top-1 −0.052 [−0.121, +0.011], top-N −0.052 [−0.121,
 +0.017], top-(N+2) −0.006 [−0.059, +0.046]. **All three include zero**: on this protocol the two are not
@@ -120,6 +127,13 @@ structures).
    DeepPocket, DeepSurf, GrASP and VN-EGNN have wrappers in `scripts/baselines/` and have never been executed, so
    the strongest claim this table supports is parity with a strong 2018 random-forest method — not with the state
    of the art.
+
+**The first trained ablation (3 seeds, seed sd 0.009) settles what the design is actually made of**, and three
+of its parts turn out not to matter: removing the cavity probes costs **+0.263** site top-1, the degree-1 vector
+channels **+0.037**, while degree-2 tensors cost **−0.006**, chirality **+0.000**, ESM-2 650M **−0.010** and the
+SAS surface module **−0.011**. The probes are the architecture; the degree-2 channels, the language model, the
+surface module and chirality do no measurable work at this scale. Full table and the confounds in
+`docs/results/README.md`.
 
 **Honest state.** Detection is not the bottleneck: our candidate set contains the answer for 0.989 of these
 structures against P2Rank's 0.931. Ranking is, and two results frame it:

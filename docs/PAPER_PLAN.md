@@ -10,15 +10,25 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 1. **A pocket model with no external dependencies.** Candidates, features, network and ranker all come from the
    structure alone; no P2Rank, fpocket or Java at training or inference. The native generator reaches a **0.977**
    candidate ceiling on 1367 RCSB structures at 30 candidates per structure.
-2. **The controlled isolation of equivariance and of degree 2 for binding-site detection.** Degree-0/1/2 Cartesian
-   channels with invariant-gated tensor messages, plus an e3nn backbone to l=3. Applying l=2 tensor attention to
-   pockets is prior art (GDEGAN 2026); what no paper provides is the ablation: lmax, equivariant versus invariant,
-   chiral versus achiral, at equal depth, width and features, on one protocol. The nearest adjacent measurement
-   (EquiPNAS on protein-nucleic acid) found the equivariant gain negligible, so a null result here is a real finding.
-   The invariant arm scalarises the same geometry in a local frame, so a gain cannot come from the baseline being
-   blind to coordinates; the blinded arm is reported separately to quantify how much of a published "equivariance
-   gain" that confound can account for.
-3. **Probes in real cavities instead of on a sphere**, plus an SAS point-cloud surface module in the same attention stack.
+2. **The ablation the field does not have, with a null result for degree 2.** Degree-0/1/2 Cartesian channels with
+   invariant-gated tensor messages, plus an e3nn backbone to l=3, ablated at equal depth, width and features on one
+   protocol. Applying l=2 tensor attention to pockets is prior art (GDEGAN 2026); what no paper provides is the
+   ablation. **Measured (2026-10-06, 3 seeds, seed sd 0.009): removing the degree-2 channels costs −0.006 site
+   top-1, and the arm is not even parameter-matched but smaller, which can only flatter degree 2.** Chirality
+   likewise costs +0.000. So the contribution is the measurement, not a gain: a method the field has adopted for
+   this task does no measurable work on it, which the nearest adjacent result (EquiPNAS on protein–nucleic acid,
+   negligible equivariant gain) makes plausible rather than surprising. Degree-1 vector channels do work (+0.037).
+   The overall equivariance figure (+0.040) is **not yet reportable**: that arm removes the steerable channels, the
+   geometry from the input and the equivariant centre head at once. `invariant_frames`, which scalarises the same
+   geometry in a local frame, isolates it and has still to be run.
+3. **Probes in real cavities are the architecture, and we can say so with a number.** Removing them costs
+   **+0.263 site top-1** — an order of magnitude more than any other component, and the single largest effect in
+   the whole ablation. VN-EGNN puts its virtual nodes on a sphere around the protein; ours start on free lattice
+   points of detected cavities, so every probe begins where a ligand atom could sit. Following the measurement, the
+   probes are now placed by a learned per-point ligandability model out of fold rather than at random within
+   buriedness tiers, with the fraction of the budget spent that way as the knob (`probe_tiered` is the comparison
+   arm). The SAS surface module, bundled with this claim before it was measured, costs −0.011 and is reported as
+   doing no measurable work.
 4. **One hotspot field** of per-class ligand-atom probabilities per lattice point, labelled from the wwPDB CCD, shared
    with the property head.
 5. **Two methodological results about measuring pocket detection**, both of which cost us numbers we had already
@@ -52,7 +62,7 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 |---|---|---|---|
 | C1 | native candidates + learned ranker match or beat fpocket/P2Rank candidates + the same ranker, with no external tool | same 1367 structures, same labels, cluster CV, paired cluster bootstrap | CI of the difference in top-1 or top-(N+2) lies below 0 |
 | C2 | network features raise the ranker | out-of-fold `net_*` features added, paired bootstrap | CI includes 0 |
-| C3 | degree-2 tensor channels beat degree ≤ 1 and the invariant model | ablation grid, 3 seeds, equal depth/width | full − no_tensors CI includes 0 |
+| C3 | degree-2 tensor channels beat degree ≤ 1 and the invariant model | ablation grid, 3 seeds, equal depth/width | **failed**: full − no_tensors = −0.006 at seed sd 0.008, on an arm smaller than full. Degree 2 does no measurable work; chirality +0.000. Reported as a null result | full − no_tensors CI includes 0 |
 | C4 | probes on cavity points beat no probes (and a sphere-probe variant) | ablation | CI includes 0 |
 | C5 | property classes and the hotspot field beat geometry-only and tabular baselines on held-out clusters | per-class AUROC/AP, ECE, enrichment of ligand atoms in top-k % points, permutation control | no gain |
 | C8 | interaction-validated hotspot labels train a better field than proximity labels | the same network trained on `y_hot` and on `y_hot_proximity`, both scored against the validated target | no difference |

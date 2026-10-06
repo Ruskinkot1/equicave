@@ -16,6 +16,49 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## The network is trained, and its ablation settles three of the project's novelty claims (2026-10-06)
+
+First trained EquiCave-Net, 3 seeds on validation fold 0, seed standard deviation about 0.009 — so a difference
+below roughly 0.02 is not distinguishable from noise:
+
+| component removed | site top-1 | drop |
+|---|---|---|
+| nothing (`full`) | 0.843 ± 0.009 | — |
+| **cavity probes** | 0.580 ± 0.009 | **+0.263** |
+| equivariance (`invariant`) | 0.803 ± 0.005 | +0.040 |
+| degree-1 vector channels | 0.806 ± 0.009 | +0.037 |
+| degree-2 tensor channels | 0.849 ± 0.008 | **−0.006** |
+| chirality | 0.843 ± 0.005 | +0.000 |
+| ESM-2 650M | 0.853 ± 0.003 | −0.010 |
+| SAS surface module | 0.854 ± 0.002 | −0.011 |
+
+**The probes are the architecture.** They are the only component with a large effect, and the rest of the design is
+either small (degree-1 channels, +0.037) or indistinguishable from zero.
+
+**The degree-2 claim fails.** `full − no_tensors` is −0.006 with seed sd 0.008, so the lower bound is nowhere near
+zero and the arm is not even parameter-matched — it is *smaller* than `full`, which can only flatter the degree-2
+side. Degree 2 does no measurable work on this task. This was the project's second claimed contribution and the
+survey established that no such ablation exists in the literature, so the measurement is still a result; what is
+retired is the accuracy claim.
+
+**ESM-2, the surface module and chirality do no measurable work either.** ESM-2 650M is the most expensive part of
+the whole pipeline — a frozen 650 M-parameter model, hours of embedding, a 710 MB cache — for −0.010.
+
+**The equivariance gain of +0.040 is real but its size is unknown**, because this `invariant` arm is the
+distances-only one: it removes the steerable channels, the geometry from the input, *and* makes the centre head a
+plain MLP. `invariant_frames`, which scalarises the same geometry in a local frame and isolates equivariance alone,
+is implemented and has never been run. No number about equivariance goes in the paper until it has.
+
+On the benchmarks the network beats the gradient-boosted ranker outright: COACH420 0.777 against 0.704 top-1,
+HOLO4K 0.862 against 0.785. And `network only` beats `ranker + network features` (0.777 against 0.704), which is
+the fourth consecutive case of feature stacking losing on a benchmark while winning in cross-validation. The
+network ships as the predictor; the ranker is a baseline.
+
+Protocol caveat: these were produced on an older checkout (`c8df939`) under the single-chain receptor, which the
+detector and ranker numbers confirm (0.642 and 0.704, matching the pre-fix runs). The comparison *between* the
+three methods is sound because all three share that protocol; the comparison against P2Rank is not, since P2Rank
+was given the whole assembly. Re-running the network under `--receptor-chains all` is the next measurement.
+
 ## All five benchmarks under the corrected protocol (2026-10-05)
 
 One model (`models/ranker_native.txt`, 32 features — the set that transfers best), one protocol, the full assembly
