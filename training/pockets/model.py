@@ -186,12 +186,120 @@ class GeoTensorAttention(nn.Module):
         return xo.to(dt), None if Vo is None else Vo.to(dt), None if To is None else To.to(dt)
 
 
+N_SITE_SUMMARY = 6          # invariant per-site scalars, see SiteDecoder.summaries
+
+
+class SiteDecoder(nn.Module):
+    """Explicit site tokens that compete with one another, instead of probes scored one at a time.
+
+    Why this exists. Every other head in this network is per node: a probe's confidence is computed from its own
+    neighbourhood and nothing tells it that another pocket in the same protein is the better answer. The measured
+    failure is exactly that -- on the COACH420 structures our first prediction gets wrong, the correct candidate is
+    ranked *second* in 24 of 53 cases and within the first five in 41 of 53, while 34 of 53 first predictions are
+    more than 8 A from the ligand, so they are a different pocket rather than a near miss. A model whose scores are
+    computed independently cannot represent "this pocket, not that one"; this module can, because the sites are
+    tokens in one attention stack and each score is a function of the whole list.
+
+    It also makes the model propose the objects the metric scores. The sites are formed by the same rule the
+    evaluation uses -- confidence order, greedy non-maximum suppression at `nms` angstroms over predicted centres --
+    so the list the decoder ranks is the list top-1 is computed from, and the ranking loss is applied to it.
+
+    What it deliberately does not do is move the centres. Six definitions of a candidate's centre were measured and
+    all gave DCC within noise of each other, so centre refinement is a closed avenue; this module only reranks, and
+    a site's centre stays the confidence-weighted mean of its member probes' predicted centres.
+
+    Everything the tokens see is invariant under a global rotation (pooled node features, vector norms, the six
+    scalars of `summaries`, and pairwise distances as an attention bias), so the site scores are invariant while the
+    centres stay equivariant by construction, being convex combinations of positions.
+    """
+
+    def __init__(self, dim: int, heads: int = 4, layers: int = 2, n_sites: int = 32, nms: float = 6.0,
+                 membership: float = 8.0, n_rbf: int = 16, cutoff: float = 30.0, dropout: float = 0.0):
+        super().__init__()
+        self.dim, self.heads, self.n_sites, self.nms, self.membership = dim, heads, n_sites, nms, membership
+        self.hd = dim // heads
+        self.token = nn.Sequential(nn.Linear(2 * dim + N_SITE_SUMMARY, dim), nn.SiLU(), nn.Linear(dim, dim))
+        self.rbf = RBF(n_rbf, cutoff)
+        self.qkv = nn.ModuleList([nn.Linear(dim, 3 * dim) for _ in range(layers)])
+        self.bias = nn.ModuleList([nn.Sequential(nn.Linear(n_rbf, heads)) for _ in range(layers)])
+        self.proj = nn.ModuleList([nn.Linear(dim, dim) for _ in range(layers)])
+        self.ff = nn.ModuleList([nn.Sequential(nn.Linear(dim, 2 * dim), nn.SiLU(), nn.Linear(2 * dim, dim))
+                                 for _ in range(layers)])
+        self.n1 = nn.ModuleList([nn.LayerNorm(dim) for _ in range(layers)])
+        self.n2 = nn.ModuleList([nn.LayerNorm(dim) for _ in range(layers)])
+        self.drop = nn.Dropout(dropout)
+        self.head = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
+
+    @torch.no_grad()
+    def seeds(self, conf: torch.Tensor, center: torch.Tensor) -> torch.Tensor:
+        """Indices of the probes that seed the sites: confidence order under greedy NMS, the evaluation's own rule."""
+        order = torch.argsort(conf, descending=True)
+        keep: list[int] = []
+        for i in order.tolist():
+            if not keep:
+                keep.append(i)
+            elif (center[i] - center[keep]).norm(dim=-1).min() > self.nms:
+                keep.append(i)
+            if len(keep) >= self.n_sites:
+                break
+        return torch.tensor(keep, dtype=torch.long, device=conf.device)
+
+    def summaries(self, w: torch.Tensor, occ: torch.Tensor, conf: torch.Tensor, center: torch.Tensor,
+                  site_center: torch.Tensor, probe_pos: torch.Tensor) -> torch.Tensor:
+        """[S, N_SITE_SUMMARY] invariant scalars per site: how much pocket there is and how sure of it the probes are.
+
+        Six, in order: the membership mass (how many probes the site gathers), the mean and maximum occupancy
+        probability of its members, their mean confidence, the spread of their predicted centres, and the distance
+        from the site to the centroid of all probes -- the centrality that the gradient-boosted ranker found to be
+        among its most useful columns, which no per-probe head can see.
+        """
+        mass = w.sum(1, keepdim=True)
+        mean_occ = w @ occ[:, None] / mass.clamp(min=1e-6)
+        max_occ = torch.stack([occ[w[s] > 1e-3].max() if (w[s] > 1e-3).any() else occ.new_zeros(())
+                               for s in range(len(w))])[:, None]
+        mean_conf = w @ conf[:, None] / mass.clamp(min=1e-6)
+        spread = ((w @ (center ** 2) / mass.clamp(min=1e-6)) - (w @ center / mass.clamp(min=1e-6)) ** 2)
+        spread = spread.clamp(min=0).sum(-1, keepdim=True).sqrt()
+        centrality = (site_center - probe_pos.mean(0, keepdim=True)).norm(dim=-1, keepdim=True)
+        return torch.cat([torch.log1p(mass), mean_occ, max_occ, mean_conf, spread, centrality / 10.0], -1)
+
+    def forward(self, xp: torch.Tensor, vnorm: torch.Tensor, center: torch.Tensor, probe_pos: torch.Tensor,
+                conf_logit: torch.Tensor, occ_logit: torch.Tensor) -> dict:
+        if not len(conf_logit):
+            z = xp.new_zeros(0)
+            return dict(site_logit=z, site_center=xp.new_zeros((0, 3)), site_member=xp.new_zeros((0, 0)))
+        conf, occ = torch.sigmoid(conf_logit), torch.sigmoid(occ_logit)
+        idx = self.seeds(conf_logit.detach(), center.detach())
+        seed_c = center[idx]                                             # [S, 3]
+        d = torch.cdist(seed_c, center)                                  # [S, P]
+        # Soft membership, so the gradient reaches every probe that supports a site rather than only its seed.
+        w = torch.exp(-(d ** 2) / (2 * self.membership ** 2)) * (d < 2 * self.membership)
+        w = w * conf[None, :].clamp(min=1e-3)                            # a probe speaks for a site in proportion to its own confidence
+        mass = w.sum(1, keepdim=True).clamp(min=1e-6)
+        site_center = w @ center / mass                                  # convex combination of positions: equivariant
+        feats = torch.cat([w @ xp / mass, w @ vnorm / mass,
+                           self.summaries(w, occ, conf, center, site_center, probe_pos)], -1)
+        h = self.token(feats)
+        bias_in = self.rbf(torch.cdist(site_center, site_center).reshape(-1)).reshape(len(h), len(h), -1)
+        for qkv, bias, proj, ff, n1, n2 in zip(self.qkv, self.bias, self.proj, self.ff, self.n1, self.n2):
+            q, k, v = qkv(n1(h)).chunk(3, dim=-1)
+            q = q.reshape(-1, self.heads, self.hd); k = k.reshape(-1, self.heads, self.hd)
+            v = v.reshape(-1, self.heads, self.hd)
+            logits = torch.einsum("qhd,khd->qkh", q, k) / (self.hd ** 0.5) + bias(bias_in)
+            a = self.drop(torch.softmax(logits, dim=1))
+            h = h + proj(torch.einsum("qkh,khd->qhd", a, v).reshape(len(h), -1))
+            h = h + ff(n2(h))
+        return dict(site_logit=self.head(h).squeeze(-1), site_center=site_center, site_member=w, site_seed=idx)
+
+
 class EquiCaveNet(nn.Module):
     def __init__(self, in_dims: dict, dim: int = 96, layers: int = 4, heads: int = 4, n_rbf: int = 32, cutoff: float = 10.0,
                  n_hot: int = 7, n_props: int = 14, equivariant: bool = True, use_vectors: bool = True, use_tensors: bool = True,
                  chiral: bool = True, use_surface: bool = True, use_probes: bool = True, dropout: float = 0.0, n_init_vec: int = 3,
                  recycles: int = 0, n_edge_scalar: int = 0, n_res_types: int = 21,
-                 invariant_mode: str = "frames", **_ignored):
+                 invariant_mode: str = "frames", site_decoder: bool = True, site_layers: int = 2,
+                 n_site_tokens: int = 32, site_nms: float = 6.0, site_membership: float = 8.0,
+                 probe_update: str = "center", flow_step: float = 2.0, **_ignored):
         super().__init__()
         self.dim, self.equivariant = dim, equivariant
         self.recycles, self.n_edge_scalar = recycles, n_edge_scalar
@@ -226,6 +334,14 @@ class EquiCaveNet(nn.Module):
         self.dir_vec = nn.Linear(dim, 1, bias=False)
         self.dir_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant arms: not equivariant
         self.off_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant model: plain regression (not equivariant)
+        # The sites as entities that compete, which no per-probe head can represent. See SiteDecoder.
+        self.site_decoder = SiteDecoder(dim, heads, site_layers, n_site_tokens, site_nms, site_membership,
+                                        dropout=dropout) if site_decoder else None
+        # How a probe moves between passes. "center" jumps it to its own predicted centre, which is one large
+        # uncorrected step; "flow" walks it along the direction head's prediction in `flow_step`-angstrom steps, so
+        # the only two mechanisms the ablation found to matter -- the probes and the dense direction signal -- drive
+        # the refinement together, and every intermediate position is supervised.
+        self.probe_update, self.flow_step = probe_update, flow_step
 
     def local_frame_scalars(self, vec0: torch.Tensor) -> torch.Tensor:
         """[N, 3 * K] rotation-invariant coordinates of a node's own vectors in a frame built from two of them.
@@ -297,8 +413,14 @@ class EquiCaveNet(nn.Module):
         pos = b["pos"]
         passes = []
         for cycle in range(self.recycles + 1):
-            if cycle:                                      # move the probes to their predicted centres and relink them
-                pos, ei, et, es = self.relink(b, passes[-1]["center"].detach(), ei, et, es)
+            if cycle:                                      # move the probes and relink them
+                prev = passes[-1]
+                if self.probe_update == "flow" and "dir" in prev:
+                    step = Fn.normalize(prev["dir"].detach(), dim=-1) * self.flow_step
+                    moved = prev["probe_pos"].detach() + step
+                else:
+                    moved = prev["center"].detach()
+                pos, ei, et, es = self.relink(b, moved, ei, et, es)
             x, V, T = self.trunk(b, pos, ei, et, es)
             o = dict(res_logit=self.head_res(x[res]).squeeze(-1), occ_logit=self.head_occ(x[probe]).squeeze(-1),
                      conf_logit=self.head_conf(x[probe]).squeeze(-1), hot_logit=self.head_hot(x[probe]),
@@ -318,7 +440,14 @@ class EquiCaveNet(nn.Module):
                 o["prop_logit"] = self.head_prop(pooled)
                 o["size_pred"] = self.head_size(pooled).squeeze(-1)
             passes.append(o)
-        out = dict(passes[-1]); out["passes"] = passes
+        last = passes[-1]
+        if self.site_decoder is not None:
+            # Only on the final pass: the decoder ranks, and ranking an unconverged probe cloud buys nothing while
+            # costing a full attention stack per cycle.
+            vnorm = (V[probe].norm(dim=-1) if self.use_vectors else torch.zeros_like(x[probe]))
+            last.update(self.site_decoder(x[probe], vnorm, last["center"], last["probe_pos"],
+                                          last["conf_logit"], last["occ_logit"]))
+        out = dict(last); out["passes"] = passes
         return out
 
     def relink(self, b: dict, new_probe_pos: torch.Tensor, ei, et, es):
@@ -462,3 +591,40 @@ def focal_bce(logit, y, gamma: float = 2.0, alpha: float = 0.75):
     pt = p * y + (1 - p) * (1 - y)
     w = alpha * y + (1 - alpha) * (1 - y)
     return (w * (1 - pt) ** gamma * ce).mean()
+
+
+def site_rank_loss(site_logit: torch.Tensor, site_center: torch.Tensor, true_centers: torch.Tensor,
+                   hit: float = 4.0) -> torch.Tensor:
+    """Listwise cross-entropy over the decoder's site list, with the sites that hit a true site as the targets.
+
+    This is the ranking objective applied to the objects the metric scores: the list is the same one evaluation
+    builds (confidence order, NMS at the evaluation's radius) and a site counts as correct under the same rule the
+    benchmark uses. `listwise_site_loss` does the analogous thing over raw probes, where one true site is
+    represented by dozens of near-duplicate positives and the decision the loss poses is therefore much easier than
+    the decision top-1 poses; here each pocket appears once.
+    """
+    if not len(true_centers) or not len(site_logit):
+        return site_logit.sum() * 0.0
+    d = torch.cdist(site_center, true_centers).min(1).values
+    pos = d <= hit
+    if not pos.any() or pos.all():                     # nothing to order, or nothing to reject
+        return site_logit.sum() * 0.0
+    return -torch.logsumexp(torch.log_softmax(site_logit, 0)[pos], 0)
+
+
+def site_margin_loss(site_logit: torch.Tensor, site_center: torch.Tensor, true_centers: torch.Tensor,
+                     hit: float = 4.0, margin: float = 1.0) -> torch.Tensor:
+    """Hinge on the hardest mistake: the best wrong site must score below the best right one by `margin`.
+
+    The listwise term above spreads its gradient over the whole list, and a list where one wrong pocket is almost as
+    good as the right one can still have a respectable loss. Top-1 does not care about the whole list: it is decided
+    by a single comparison, between the best correct site and the best incorrect one. This term is that comparison
+    and nothing else, which is the measured failure mode written as a loss -- the right pocket ranked second.
+    """
+    if not len(true_centers) or not len(site_logit):
+        return site_logit.sum() * 0.0
+    d = torch.cdist(site_center, true_centers).min(1).values
+    pos = d <= hit
+    if not pos.any() or pos.all():
+        return site_logit.sum() * 0.0
+    return Fn.relu(margin + site_logit[~pos].max() - site_logit[pos].max())

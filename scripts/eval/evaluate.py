@@ -130,7 +130,12 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
         if extra is not None:
             scores["ranker+net"] = scores.pop("ranker")
     if extra is not None:
-        scores["network only"] = [e["net_center_conf"] + e["net_seg"] for e in extra]
+        # With the site decoder the network has an opinion about which pocket beats which; without it the only
+        # network ranking available is the per-candidate summary, which is a score of one pocket at a time.
+        if extra and "net_site_score" in extra[0]:
+            scores["network only"] = [e["net_site_score"] for e in extra]
+        else:
+            scores["network only"] = [e["net_center_conf"] + e["net_seg"] for e in extra]
     return [dict(center=r["center"], **{k: v[i] for k, v in scores.items()}) for i, r in enumerate(rows)]
 
 

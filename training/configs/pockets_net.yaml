@@ -42,6 +42,22 @@ model:
   use_surface: true
   use_probes: true
   dropout: 0.1
+  # Sites as entities that compete with one another. Everything else in this network is a per-node score, so no
+  # head could represent "this pocket, not that one" -- which is the measured failure: on the COACH420 structures
+  # our first prediction gets wrong, the right candidate is second in 24 of 53 cases. The tokens are formed by the
+  # evaluation's own rule (confidence order, NMS at 6 A) so the list the decoder ranks is the list top-1 is
+  # computed from. `no_site_decoder` is the comparison arm.
+  site_decoder: true
+  site_layers: 2
+  n_site_tokens: 32
+  site_nms: 6.0              # the evaluation's non-redundancy radius, so the proposals are the scored objects
+  site_membership: 8.0       # angstroms of the soft membership kernel from a site to its probes
+  # How a probe moves between recycling passes. "center" jumps it onto its own predicted centre in one step;
+  # "flow" walks it `flow_step` angstroms along the direction head's prediction, so refinement is driven by the two
+  # mechanisms the ablation found to matter (the probes, and the dense direction signal) and every intermediate
+  # position is supervised. `probe_flow` is the arm.
+  probe_update: center       # center | flow
+  flow_step: 2.0
 loss:
   hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
   mask_frac: 0.15            # self-supervised masked-residue task
@@ -57,6 +73,9 @@ loss:
   w_hot: 1.0
   w_dir: 0.5                 # P12 cosine loss to the nearest ligand atom, on every probe near exactly one site
   w_listwise: 0.3            # P2 listwise ordering of probes inside one structure
+  w_site_rank: 1.0           # listwise ordering of the decoder's site list -- the objects the metric scores
+  w_site_margin: 0.5         # the single comparison top-1 decides: best correct site against best incorrect one
+  site_margin: 1.0           # how far apart in logits that comparison must come out
   w_prop: 0.5
   occ_pos_weight: 3.0
   res_pos_weight: 3.0

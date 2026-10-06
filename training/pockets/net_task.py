@@ -70,9 +70,15 @@ def losses(out, b, w, res_mask=None, pot_mask=None, pot_target=None):
         part["hot"] = M.focal_bce(o["hot_logit"], b["y_hot"])
         if "dir" in o and "probe_dir" in b:            # dense geometric signal: every probe near exactly one site
             part["dir"] = M.direction_loss(o["dir"], b["probe_dir"], b["probe_dir_mask"])
-        if w.get("w_listwise", 0.0) and "site_centers" in b:   # the only term that orders probes within a structure
+        if w.get("w_listwise", 0.0) and "site_centers" in b:   # orders probes within a structure
             part["listwise"] = M.listwise_site_loss(o["conf_logit"], o["center"], b["site_centers"],
                                                     o.get("probe_pos", b["pos"][b["slices"]["probe"]]))
+        if last and "site_logit" in o and "site_centers" in b:
+            # The ranking objective on the list the metric is computed from, plus the single comparison top-1
+            # actually decides: best correct site against best incorrect one.
+            part["site_rank"] = M.site_rank_loss(o["site_logit"], o["site_center"], b["site_centers"])
+            part["site_margin"] = M.site_margin_loss(o["site_logit"], o["site_center"], b["site_centers"],
+                                                     margin=w.get("site_margin", 1.0))
         if "prop_logit" in o:
             part["prop"] = torch.nn.functional.binary_cross_entropy_with_logits(o["prop_logit"], b["y_prop"])
         if last and res_mask is not None and "seq_logit" in o and "res_type" in b:
@@ -90,8 +96,19 @@ def losses(out, b, w, res_mask=None, pot_mask=None, pot_target=None):
 
 
 def predict_sites(out, probe_pos, nms: float = 6.0, max_sites: int = 30):
-    """Network-only site list: predicted centres ranked by confidence with NMS (for evaluation of the network alone)."""
+    """Network-only site list, ranked.
+
+    With the site decoder the list is its own: the tokens were formed by this same NMS rule inside the model and
+    then scored against one another, so its ordering is the model's answer and re-deriving one from per-probe
+    confidence would discard exactly the comparison the decoder exists to make. Without it (the `no_site_decoder`
+    arm, and any older checkpoint) the list is the predicted centres in confidence order under NMS.
+    """
     import torch
+    if "site_logit" in out and len(out["site_logit"]):
+        sl = out["site_logit"].detach().cpu().numpy()
+        sc = out["site_center"].detach().cpu().numpy()
+        order = np.argsort(-sl)[:max_sites]
+        return sc[order], sl[order]
     conf = torch.sigmoid(out["conf_logit"]).detach().cpu().numpy(); c = out["center"].detach().cpu().numpy()
     order = np.argsort(-conf); keep = []
     for i in order:
@@ -120,6 +137,14 @@ def net_features(out, probe_pos, centers: np.ndarray, r: float = 4.0, radii=(4.0
     offset_norm = np.linalg.norm(out["offset"].detach().cpu().numpy(), axis=1)
     tp, tc = cKDTree(probe_pos), cKDTree(pc)
     n_hot = hot.shape[1]
+    # The site decoder's own score, carried to whichever native candidate each of its sites belongs to. This is the
+    # one column that holds a comparison between pockets rather than a summary of one pocket, so it is the column
+    # the `network only` ranking uses.
+    site_sc = site_ct = None
+    if "site_logit" in out and len(out["site_logit"]):
+        site_sc = out["site_logit"].detach().cpu().numpy()
+        site_ct = out["site_center"].detach().cpu().numpy()
+        site_tree = cKDTree(site_ct)
     rows = []
     for ctr in centers:
         row = {}
@@ -141,6 +166,10 @@ def net_features(out, probe_pos, centers: np.ndarray, r: float = 4.0, radii=(4.0
         row["net_center_dist"] = float(np.linalg.norm(pc - ctr, axis=1).min()) if len(pc) else 99.0
         row["net_seg"] = row["net_occ_mean_4"]                      # kept so older models and tables still work
         row["net_hot_mean"] = float(np.mean([row[f"net_hot{j}_mean_4"] for j in range(n_hot)]))
+        if site_sc is not None:
+            near = site_tree.query_ball_point(ctr, 8.0)
+            row["net_site_score"] = float(site_sc[near].max()) if near else float(site_sc.min() - 1.0)
+            row["net_site_dist"] = float(np.linalg.norm(site_ct - ctr, axis=1).min())
         rows.append(row)
     return rows
 

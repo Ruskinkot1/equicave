@@ -29,3 +29,23 @@ ablations:
   e3nn_l1: {model.backbone: e3nn, model.lmax: 1}    # with l2 and l3 below this is a real degree sweep
   e3nn_l2: {model.backbone: e3nn, model.lmax: 2}
   e3nn_l3: {model.backbone: e3nn, model.lmax: 3}
+  # The site decoder, each piece as a removal so the baseline is the model that ships. The decoder is the answer to
+  # a measured failure rather than a guess, so these three arms are the ones that decide whether the diagnosis was
+  # right: if `no_site_decoder` matches `full`, pocket-against-pocket comparison is not what was missing.
+  no_site_decoder: {model.site_decoder: false}        # back to per-probe confidence, the previous ranking
+  no_site_margin: {loss.w_site_margin: 0.0}           # keep the listwise term, drop the one comparison top-1 decides
+  no_site_rank: {loss.w_site_rank: 0.0}               # keep the margin, drop the listwise term over sites
+  site_layers_4: {model.site_layers: 4}               # is two layers of competition enough
+  # Probe motion: one jump onto the predicted centre against several steps along the predicted direction.
+  probe_flow: {model.probe_update: flow}
+  probe_flow_4: {model.probe_update: flow, model.recycles: 4}
+  # Spend the parameters where the measurement says they work: no degree-2 channels, no chirality, no surface
+  # module, no language model -- all four were within seed noise -- and the saving reinvested in depth and probes.
+  # This is the model the ablation argues for, and it is a prediction that can fail.
+  lean:
+    model.use_tensors: false
+    model.chiral: false
+    model.use_surface: false
+    data.esm: null
+    model.layers: 7
+    data.n_probe: 1024

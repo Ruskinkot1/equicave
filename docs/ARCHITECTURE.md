@@ -204,6 +204,55 @@ missing. `tests/test_model.py` asserts both halves: the arm is rotation-invarian
 initial vectors are zeroed, so it cannot silently become blind again. `invariant_blind` keeps the old behaviour as a
 separate arm, so the difference between "invariant" and "blind" is itself a reported number.
 
+### Stage 2c. The site decoder: pockets that compete with one another
+
+Everything above is a **per-node** score. A probe's confidence is a function of its own neighbourhood, so no head in
+the network could represent the sentence "this pocket, not that one" -- and that sentence is what top-1 measures.
+The diagnosis is not a guess. On the COACH420 structures whose first prediction is wrong, the correct candidate is
+ranked **second in 24 of 53** cases and inside the first five in 41 of 53, while 34 of 53 first predictions sit more
+than 8 A from the ligand, so they are a *different pocket* rather than a near miss. Two cheaper explanations were
+measured and refuted first: prediction fragmentation cannot be it (210 of 283 structures have one site, where top-N
+is top-1 and merging changes nothing, and the deficit is largest exactly there) and mis-centring cannot be it (six
+centre definitions all give DCC within noise).
+
+So `SiteDecoder` makes sites first-class objects:
+
+1. **Formation by the evaluation's own rule.** Probes in confidence order under greedy non-maximum suppression at
+   6 A over their predicted centres -- the same rule `scripts/eval/evaluate.py` scores with. The list the decoder
+   ranks is therefore the list top-1 is computed from, which no previous version of this model could say.
+2. **Soft membership.** Each site gathers every probe within a Gaussian kernel of it, weighted by that probe's own
+   confidence, so the gradient reaches the probes that support a site and not only its seed. The site's centre is
+   the membership-weighted mean of its members' predicted centres: a convex combination of positions, hence
+   equivariant by construction.
+3. **Six invariant summaries per site**, which no per-probe head can see: membership mass, mean and maximum
+   occupancy probability, mean confidence, the spread of member centres, and the distance from the site to the
+   centroid of all probes -- the `centrality` that the gradient-boosted ranker found among its most useful columns.
+4. **Competition.** Two transformer layers over the site tokens with a pairwise distance bias, so each score is a
+   function of the whole list rather than of one pocket in isolation.
+5. **Two losses.** `site_rank_loss` is listwise cross-entropy over the list with the sites that hit a true site as
+   targets -- the analogous probe-level term trains on dozens of near-duplicate positives per pocket, an easier
+   decision than the one the benchmark poses. `site_margin_loss` is the single comparison top-1 actually decides:
+   the best incorrect site must fall a margin below the best correct one. That is the measured failure written as a
+   loss.
+
+What it deliberately does **not** do is move a centre. Re-centring is a closed avenue by measurement, so the decoder
+only reranks. Everything it sees is rotation-invariant and `tests/test_model.py` asserts it, together with the
+equivariance of the centres, the non-redundancy of the list at the evaluation radius, and that a token is not merely
+its seed probe.
+
+The decoder's score is what `network only` ranks by, and it is exported to the ranker as `net_site_score` -- the one
+network column that holds a comparison between pockets instead of a summary of one. `no_site_decoder`,
+`no_site_rank`, `no_site_margin` and `site_layers_4` are the arms that decide whether the diagnosis was right: if
+`no_site_decoder` matches `full`, pocket-against-pocket comparison was not what was missing.
+
+### Probe flow
+
+A recycling pass used to jump every probe onto its own predicted centre: one large step with no intermediate
+supervision. With `probe_update: flow` a pass instead walks each probe `flow_step` angstroms along the direction its
+own direction head predicts, so refinement is driven by the two mechanisms the trained ablation found to matter --
+the probes, and the dense cosine signal towards the nearest ligand atom -- and every intermediate position is
+supervised, because each pass is already a supervised pass. `probe_flow` and `probe_flow_4` are the arms.
+
 ---
 
 ## Stage 2b. Per-point ligandability (`src/equicave/point_score.py`)

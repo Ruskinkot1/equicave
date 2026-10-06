@@ -347,3 +347,112 @@ def test_bf16_and_fp32_agree_to_low_precision():
         with torch.autocast("cpu", dtype=torch.bfloat16):
             bf16 = net(b)["occ_logit"]
     assert torch.allclose(fp32, bf16.float(), atol=0.2), (fp32[:4], bf16[:4])
+
+
+# --- the site decoder: sites as entities that compete, instead of probes scored one at a time ---
+
+def test_site_scores_are_rotation_invariant_and_centres_equivariant():
+    """The decoder may only see invariants, or a pocket's rank would depend on how the crystal was oriented."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True).eval()
+    b = _batch(); R = _rot(1); t = torch.tensor([-4.0, 1.5, 2.0])
+    with torch.no_grad():
+        o1, o2 = net(b), net(_apply(b, R, t))
+    assert len(o1["site_logit"]) > 1, "the decoder produced no list to rank"
+    assert torch.allclose(o1["site_logit"], o2["site_logit"], atol=1e-4)
+    assert torch.allclose(o1["site_center"] @ R.T + t, o2["site_center"], atol=1e-4)
+
+
+def test_a_site_token_is_not_merely_its_seed_probe():
+    """Each site pools the probes that support it, so its score must move when a supporting probe's input changes."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True).eval()
+    b = _batch()
+    with torch.no_grad():
+        base = net(b)
+        w = base["site_member"]
+        # a probe that is a member of site 0 but is not its seed
+        member = [j for j in range(w.shape[1]) if w[0, j] > 1e-2 and j != int(base["site_seed"][0])]
+        assert member, "site 0 gathered no probe besides its seed"
+        c = dict(b); c["feat_probe"] = b["feat_probe"].clone()
+        c["feat_probe"][member[0]] += 3.0
+        moved = net(c)
+    assert not torch.allclose(base["site_logit"][0], moved["site_logit"][0], atol=1e-5)
+
+
+def test_the_site_list_is_non_redundant_at_the_evaluation_radius():
+    """The tokens are formed by the rule the benchmark scores with, so no two of them may sit within it."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True,
+                        site_nms=6.0).eval()
+    with torch.no_grad():
+        o = net(_batch(n_probe=24))
+    seeds = o["site_seed"]
+    centres = o["center"][seeds]
+    d = torch.cdist(centres, centres) + torch.eye(len(seeds)) * 99
+    assert float(d.min()) > 6.0
+
+
+def test_the_margin_loss_is_the_comparison_top1_decides():
+    """Zero when the best correct site already leads by the margin, positive when a wrong one is on top."""
+    centres = torch.tensor([[0.0, 0, 0], [20.0, 0, 0]])
+    true = torch.tensor([[0.0, 0, 0]])
+    good = M.site_margin_loss(torch.tensor([5.0, 0.0]), centres, true, margin=1.0)
+    bad = M.site_margin_loss(torch.tensor([0.0, 5.0]), centres, true, margin=1.0)
+    assert float(good) == 0.0
+    assert float(bad) == pytest.approx(6.0)
+
+
+def test_the_site_losses_are_silent_when_there_is_nothing_to_order():
+    """No true site, every site correct, or no site at all: a structure must not be charged for an absent decision."""
+    centres = torch.tensor([[0.0, 0, 0], [20.0, 0, 0]])
+    logit = torch.tensor([1.0, 2.0])
+    empty = torch.zeros((0, 3))
+    for f in (M.site_rank_loss, M.site_margin_loss):
+        assert float(f(logit, centres, empty)) == 0.0
+        assert float(f(logit, centres, centres)) == 0.0                      # every site hits: nothing to reject
+        assert float(f(torch.zeros(0), empty, centres)) == 0.0
+
+
+def test_site_rank_loss_falls_when_the_right_site_rises():
+    centres = torch.tensor([[0.0, 0, 0], [20.0, 0, 0], [40.0, 0, 0]])
+    true = torch.tensor([[1.0, 0, 0]])
+    worse = M.site_rank_loss(torch.tensor([0.0, 3.0, 3.0]), centres, true)
+    better = M.site_rank_loss(torch.tensor([3.0, 0.0, 0.0]), centres, true)
+    assert float(better) < float(worse)
+
+
+def test_probe_flow_moves_probes_along_the_predicted_direction():
+    """In flow mode a recycling step is a bounded walk along the direction head, not a jump to the centre."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, recycles=1,
+                        probe_update="flow", flow_step=2.0).eval()
+    b = _batch()
+    with torch.no_grad():
+        o = net(b)
+    first, second = o["passes"][0], o["passes"][1]
+    step = (second["probe_pos"] - first["probe_pos"]).norm(dim=-1)
+    assert torch.allclose(step, torch.full_like(step, 2.0), atol=1e-4)
+    cos = torch.nn.functional.cosine_similarity(second["probe_pos"] - first["probe_pos"], first["dir"], dim=-1)
+    assert float(cos.min()) > 0.99
+
+
+def test_the_decoder_survives_a_bf16_step():
+    """Mixed precision has broken this model twice; the decoder's attention is new surface for it."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True)
+    b = _batch()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = net(b)
+        loss = (M.site_rank_loss(out["site_logit"], out["site_center"], torch.tensor([[0.0, 0.0, 0.0]]))
+                + M.site_margin_loss(out["site_logit"], out["site_center"], torch.tensor([[0.0, 0.0, 0.0]])))
+    loss.backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in net.site_decoder.parameters())
+
+
+def test_without_the_decoder_the_model_is_unchanged():
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=False).eval()
+    with torch.no_grad():
+        o = net(_batch())
+    assert "site_logit" not in o and net.site_decoder is None
