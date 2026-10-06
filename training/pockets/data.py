@@ -372,6 +372,30 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
     import csv
     from training.pockets.esm_embed import Embedder, cached
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The cache is keyed by PDB id alone, so every setting that changes the arrays has to be pinned beside it or a
+    # changed featurisation silently reuses the old files and the run measures the previous architecture while the
+    # log claims the new one. This bit us in waiting: `probe_sampling` moved from random to learned placement and
+    # nothing in the pipeline would have noticed.
+    from equicave import pocket_features as pf
+    sig = dict(n_probe=n_probe, n_surf=n_surf, k_scale=k_scale, druglike_only=druglike_only,
+               require_interaction=require_interaction, residue_chemistry=residue_chemistry,
+               probe_potential=probe_potential, probe_sampling=probe_sampling,
+               point_model_tag=point_model_tag if probe_sampling == "ligandable" else "",
+               probe_ligandable_frac=probe_ligandable_frac if probe_sampling == "ligandable" else None,
+               esm=esm_name, geometry=pf.geometry())
+    sig_file = out_dir / ".featurisation.json"
+    if sig_file.exists():
+        old_sig = json.loads(sig_file.read_text())
+        if old_sig != sig:
+            differs = sorted(k for k in set(old_sig) | set(sig) if old_sig.get(k) != sig.get(k))
+            raise RuntimeError(
+                f"the cache at {out_dir} was built with a different featurisation and would be reused as is, so "
+                f"the run would measure the old one. Differs in: {differs}. Delete the directory to rebuild it, or "
+                f"point data.cache_dir at a new one (the arms that change featurisation each want their own).")
+    else:
+        sig_file.write_text(json.dumps(sig, indent=1, sort_keys=True))
+
     rows = list(csv.DictReader(open(manifest_csv)))
     if limit:
         rows = rows[:limit]

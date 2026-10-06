@@ -41,6 +41,15 @@ SCALE=max NET_SEEDS=1 bash scripts/train/train_all.sh                           
 FPOCKET=/path/to/fpocket PRANK=/path/to/prank STAGES=baselines bash scripts/train/train_all.sh
 ```
 
+**What is cached, and the one place that used to bite.** Structures (`data/pockets_ds/pdb`, `data/external/pdb`),
+the candidate and point tables (in restartable chunks), ESM-2 embeddings (`data/cache/esm`), CCD entries and the
+network feature cache (`data/cache/net*`) are all keyed by structure and skipped when present, so re-running any
+stage costs nothing for work already done. The network cache is keyed by PDB id **alone**, so a changed
+featurisation would have been served from the old files and the run would have measured the previous architecture
+while the log claimed the new one. The settings that change the arrays are now pinned in
+`<cache>/.featurisation.json` and a mismatch stops the run naming the fields that differ: delete the directory to
+rebuild, or point `data.cache_dir` at a new one. Each arm that changes featurisation wants its own cache.
+
 Two measured facts to keep in mind while reading whatever it produces, both of which cost this project a day:
 
 * **Cross-validated top-1 on our manifest does not predict benchmark top-1.** Three feature sets ranked in the

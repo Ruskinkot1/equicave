@@ -142,3 +142,34 @@ def ps_buried_index() -> int:
     """Index of the lattice-buriedness column in the per-point feature row."""
     from equicave import point_score as ps
     return ps.POINT_FEATURES.index("p_buried")
+
+
+def test_the_cache_refuses_to_be_reused_under_a_different_featurisation(tmp_path):
+    """The cache is keyed by PDB id alone, so a changed featurisation would silently be served from the old files.
+
+    That is not hypothetical: probe placement moved from a random draw to a learned model, and without this check a
+    run would have reported the new architecture while measuring the previous one. The settings that change the
+    arrays are pinned beside the cache and a mismatch raises, naming the fields that differ.
+    """
+    import pytest
+    from training.pockets import data as D
+
+    cache = tmp_path / "cache"
+    files = []
+    for k in range(2):
+        p = _synthetic(tmp_path, f"C{k}", k)
+        files.append(p)
+    man = tmp_path / "manifest.csv"
+    man.write_text("pdb,cluster30,fold,ligands\n" + "".join(
+        f'C{k},c{k},{k},"[[""LIG"",""B"",""x"",100]]"\n' for k in range(2)))
+
+    ids = D.build_cache(man, tmp_path, cache, None, limit=2, n_probe=32, n_surf=16, log=lambda m: None)
+    assert (cache / ".featurisation.json").exists()
+    # the same settings reuse the cache without complaint
+    assert D.build_cache(man, tmp_path, cache, None, limit=2, n_probe=32, n_surf=16, log=lambda m: None) == ids
+    # a setting that changes the arrays must stop the run and say which one
+    with pytest.raises(RuntimeError, match="different featurisation"):
+        D.build_cache(man, tmp_path, cache, None, limit=2, n_probe=64, n_surf=16, log=lambda m: None)
+    with pytest.raises(RuntimeError, match="n_surf|probe_potential"):
+        D.build_cache(man, tmp_path, cache, None, limit=2, n_probe=32, n_surf=16, probe_potential=False,
+                      log=lambda m: None)
