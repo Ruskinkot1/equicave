@@ -422,10 +422,26 @@ explanations were measured and all three are refuted:
   first stage's 0.796 top-1, re-ranking the top 3 gives 0.771 and the top 5 gives 0.766, top-(N+2) unchanged at
   0.919. The restriction discards about 97 % of the rows — and with them the easy negatives that put the hard pair
   on a scale. Kept behind a flag to be retried when the dataset is an order of magnitude larger.
+* **Giving the ranker a shorter list does not help.** We emit 30 candidates where P2Rank emits 9.6, so the top-1
+  decision might be easier over fewer. Restricting to the detector's own top-k gives 0.659 at k = 5 and returns to
+  the unrestricted 0.698 by k = 15, while the ceiling falls from 0.989 to 0.872. The surplus candidates are not
+  what it gets wrong.
+* **Blending the detector's score with the ranker's does not help, and nearly passed for a result.** Swept on the
+  benchmark the blend peaks at 0.721 against 0.698. Selected the honest way — on the 1367-structure out-of-fold
+  cross-validation — the best weight is 1.00, the ranker alone, and every blend is worse. The benchmark peak was
+  four structures of noise out of 179.
+* **Telling the ranker how each candidate compares with its best competitor does nothing.** This is the cheap form
+  of the site decoder's idea: besides each feature's within-structure z-score, its margin against the best other
+  candidate, 96 columns instead of 64. Out of fold, 0.7286 against 0.7323, a paired cluster bootstrap of
+  **−0.0037 [−0.0163, +0.0088]** — not even a cross-validation win that later fails to transfer. It does not refute
+  the decoder, which learns a function of the whole list rather than a fixed comparison with one competitor, but it
+  is evidence against the family, and we report it beside the decoder rather than only in its favour.
 
-What remains is how a candidate is scored as a whole, and the designed remedy is the network's per-probe
-segmentation and confidence, which scores points inside the cavity instead of summarising the pocket with features.
-Its single best per-point aggregate already ranks candidates at 0.741 top-1 against the geometric score's 0.473.
+Seven remedies, seven nulls. What remains is how a candidate is scored as a whole, and the designed remedy is the
+network — per-probe segmentation and confidence that score points inside the cavity instead of summarising the
+pocket with features, and the site decoder of 3.6 that compares pockets against one another. Its single best
+per-point aggregate already ranks candidates at 0.741 top-1 against the geometric score's 0.473. We state the
+prior honestly: the margin result above is the cheap version of the decoder's hypothesis and it came out at zero.
 
 ## 3.10 Which modern methods can be run at all (Table 7)
 
