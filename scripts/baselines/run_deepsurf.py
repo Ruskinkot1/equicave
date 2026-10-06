@@ -38,28 +38,49 @@ from equicave import labels as LB, pockets as pk, progress, structure, tables  #
 BRIDGE = pathlib.Path(__file__).resolve().parent / "deepsurf_bridge.py"
 
 
-def predict_batch(a, tasks, work: pathlib.Path):
-    """Yield `(pdb_id, [(centre, score), ...] or None)` for a list of `(pdb_id, path)`, streamed as they finish.
-
-    One subprocess for the whole list: their graph is built once, which matters because importing TensorFlow under
-    the pure-Python protobuf implementation this environment needs costs more than the inference itself.
-    """
+def run_bridge(a, tasks, work: pathlib.Path, errlog: pathlib.Path):
+    """Yield `(pdb_id, sites or None)` from one bridge process over `tasks`, streamed as they finish."""
     lst = work / "list.txt"
     lst.write_text("".join(f"{i} {p}\n" for i, p in tasks))
     env = dict(os.environ, PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="python")
-    proc = subprocess.Popen([a.python, str(BRIDGE), a.repo, str(lst), a.models, str(work), a.model,
-                             str(a.threshold)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            text=True, env=env)
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        if line.startswith("RESULT "):
-            _, pdb_id, blob = line.split(" ", 2)
-            yield pdb_id, [(np.asarray(s["center"], float), float(s["score"])) for s in json.loads(blob)]
-        elif line.startswith("FAILED "):
-            _, pdb_id, msg = line.split(" ", 2)
-            print(f"  {pdb_id}: {msg}", flush=True)
-            yield pdb_id, None
-    proc.wait()
+    with open(errlog, "a") as err:
+        proc = subprocess.Popen([a.python, str(BRIDGE), a.repo, str(lst), a.models, str(work), a.model,
+                                 str(a.threshold)], stdout=subprocess.PIPE, stderr=err, text=True, env=env)
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line.startswith("RESULT "):
+                _, pdb_id, blob = line.split(" ", 2)
+                yield pdb_id, [(np.asarray(s["center"], float), float(s["score"])) for s in json.loads(blob)]
+            elif line.startswith("FAILED "):
+                _, pdb_id, msg = line.split(" ", 2)
+                print(f"  {pdb_id}: {msg}", flush=True)
+                yield pdb_id, None
+        proc.wait()
+
+
+def predict_batch(a, tasks, work: pathlib.Path, errlog: pathlib.Path):
+    """Yield `(pdb_id, sites or None)` for every task, restarting the bridge when it dies mid-list.
+
+    One subprocess per list, because building their TensorFlow graph costs more than the inference -- but a
+    process that dies on a structure would otherwise take every structure after it with it, silently. Their
+    stderr goes to `errlog` rather than being discarded, since a crash is the thing worth reading.
+    """
+    left = list(tasks)
+    while left:
+        before = len(left)
+        got = set()
+        for pdb_id, sites in run_bridge(a, left, work, errlog):
+            got.add(pdb_id)
+            yield pdb_id, sites
+        left = [t for t in left if t[0] not in got]
+        if left and len(left) == before:
+            # The process died before reporting anything at all: drop the first structure, which is where it died,
+            # and carry on with the rest rather than looping on it for ever.
+            print(f"  {left[0][0]}: their process died before reporting; skipped", flush=True)
+            yield left[0][0], None
+            left = left[1:]
+        elif left:
+            print(f"  their process stopped with {len(left)} structures left; restarting it", flush=True)
 
 
 def main():
@@ -109,7 +130,7 @@ def main():
 
     batch_recs, done = [], 0
     with tempfile.TemporaryDirectory() as tmp, progress.Bar(f"DeepSurf on {a.set}", len(tasks), unit="pdb") as bar:
-        for pdb_id, sites in predict_batch(a, tasks, pathlib.Path(tmp)):
+        for pdb_id, sites in predict_batch(a, tasks, pathlib.Path(tmp), chunk_dir / "their_stderr.log"):
             r = by_id[pdb_id]
             path = dict(tasks)[pdb_id]
             done += 1
