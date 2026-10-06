@@ -456,3 +456,42 @@ def test_without_the_decoder_the_model_is_unchanged():
     with torch.no_grad():
         o = net(_batch())
     assert "site_logit" not in o and net.site_decoder is None
+
+
+# --- mixed precision: the CPU autocast policy is not the CUDA one, so test the CUDA one explicitly ---
+
+def test_seg_softmax_survives_a_float32_exp_in_a_bf16_stream():
+    """CUDA autocast forces `exp` to float32 while the stream stays bf16; CPU autocast does not.
+
+    A CPU bf16 test therefore passes while the CUDA run dies on its first batch -- which is what happened. The
+    reduction must not care which side comes back in which dtype.
+    """
+    logits = torch.randn(40, 4, dtype=torch.bfloat16)
+    index = torch.randint(0, 7, (40,))
+    out = M.seg_softmax(logits, index, 7)
+    assert out.dtype == torch.bfloat16
+    ref = M.seg_softmax(logits.float(), index, 7)
+    assert torch.allclose(out.float(), ref, atol=2e-2)
+    for j in range(7):                                      # each group must still sum to one
+        m = index == j
+        if m.any():
+            assert torch.allclose(ref[m].sum(0), torch.ones(4), atol=1e-4)
+
+
+def test_a_full_step_survives_cudas_autocast_policy_simulated_on_cpu(monkeypatch):
+    """Force every `exp` to float32, the way CUDA autocast does, and take a full training step under CPU bf16.
+
+    This is the regression test the previous bf16 fixes needed and did not have: they were written against CPU
+    autocast, whose promotion list is different, so the one operation that mattered was never exercised.
+    """
+    real_exp = torch.exp
+    monkeypatch.setattr(torch, "exp", lambda t, *a, **k: real_exp(t.float(), *a, **k))
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True)
+    b = _batch()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = net(b)
+        loss = (out["occ_logit"].float().mean() + out["conf_logit"].float().mean()
+                + M.site_rank_loss(out["site_logit"], out["site_center"], torch.tensor([[0.0, 0.0, 0.0]])))
+    loss.backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in net.parameters())

@@ -45,13 +45,24 @@ def sym_traceless(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def seg_softmax(logits: torch.Tensor, index: torch.Tensor, n: int) -> torch.Tensor:
-    """Softmax of `logits` [E, H] over groups given by `index` [E] (destination nodes)."""
-    H = logits.shape[1]
+    """Softmax of `logits` [E, H] over groups given by `index` [E] (destination nodes).
+
+    Computed in float32 and returned in the input dtype, which is both the numerically right thing for a
+    normalisation and the only form that survives mixed precision. Autocast keeps a list of operations it forces
+    to float32, `exp` among them on CUDA, so a buffer allocated as `logits.dtype` (bf16) and an `exp` result
+    (float32) met in `index_add_`, which raises outright. The list differs between the CPU and CUDA autocast
+    implementations -- on CPU `exp` is not promoted -- so a CPU bf16 test passes while the CUDA run dies on its
+    first batch, which is exactly what happened. Doing the whole reduction in float32 cannot be caught out by
+    either policy.
+    """
+    dt = logits.dtype
+    lg = logits.float()
+    H = lg.shape[1]
     idx = index[:, None].expand(-1, H)
-    mx = torch.full((n, H), -1e30, device=logits.device, dtype=logits.dtype).scatter_reduce(0, idx, logits, "amax", include_self=True)
-    ex = torch.exp(logits - mx[index])
-    den = torch.zeros((n, H), device=logits.device, dtype=logits.dtype).index_add_(0, index, ex)
-    return ex / (den[index] + 1e-9)
+    mx = torch.full((n, H), -1e30, device=lg.device, dtype=lg.dtype).scatter_reduce(0, idx, lg, "amax", include_self=True)
+    ex = torch.exp(lg - mx[index])
+    den = torch.zeros((n, H), device=lg.device, dtype=lg.dtype).index_add_(0, index, ex)
+    return (ex / (den[index] + 1e-9)).to(dt)
 
 
 class RBF(nn.Module):
