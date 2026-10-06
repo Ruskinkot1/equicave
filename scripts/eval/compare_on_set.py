@@ -161,7 +161,10 @@ def main():
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"compare_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
     clean = {s: {m: {k: v for k, v in st.items() if k != "_per"} for m, st in d.items()} for s, d in results.items()}
-    (out / f"compare_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, n_common=len(common), ref=ref, results=clean), indent=1))
+    # Which of our eval tables was compared against which tool tables, so the row cannot be read without knowing
+    # the protocol behind it.
+    (out / f"compare_{a.set}{a.tag}.json").write_text(json.dumps(dict(
+        set=a.set, n_common=len(common), ref=ref, run=dict(vars(a)), results=clean), indent=1))
     print("\n".join(lines))
 
 

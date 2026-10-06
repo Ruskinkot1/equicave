@@ -223,6 +223,13 @@ def _one(task):
     return dict(pdb=pdb, status="ok", n_sites=ns, n_cands=len(preds)), out
 
 
+def git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
+    except Exception:                                  # noqa: BLE001 -- a checkout without git history
+        return "unknown"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True); ap.add_argument("--ranker", default=""); ap.add_argument("--net", default="")
@@ -319,8 +326,13 @@ def main():
                          f"{M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} | {rtxt} |")
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"eval_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
+    # The protocol goes in the file with the numbers. A results file that does not say which ranker, which network
+    # and which receptor definition produced it cannot be compared with another one -- the single-chain receptor bug
+    # was invisible for exactly that reason, and every number measured under it had to be thrown away.
+    provenance = dict(commit=git_commit(), geometry=pf.geometry(),
+                      **{k: v for k, v in vars(a).items() if k not in ("jobs",)})
     (out / f"eval_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, ligand_rule=a.ligand_rule, n=len(rows),
-        status=summ.status.value_counts().to_dict(), results=results), indent=1))
+        run=provenance, status=summ.status.value_counts().to_dict(), results=results), indent=1))
     cand.to_csv(REPO / "data/processed" / f"eval_candidates_{a.set}{a.tag}.csv", index=False)
     print("\n".join(lines))
 
