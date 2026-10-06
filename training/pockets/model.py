@@ -44,6 +44,18 @@ def sym_traceless(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return m - tr[..., None, None] * EYE.to(a)
 
 
+def add_into(dest: torch.Tensor, index: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    """`dest.index_add_(0, index, src)` with the source brought to the destination's dtype.
+
+    Mixed precision has broken this model four times, each time in a different accumulation, and each fix cast one
+    more intermediate by hand. The cause is structural: autocast keeps a list of operations it forces to float32,
+    the list differs between its CPU and CUDA implementations, and a float32 value multiplied into a bf16 stream
+    promotes the product back to float32 -- which `index_add_` refuses. Casting at the accumulation is the only
+    place where every such path has to pass, so it is done here instead of at each producer.
+    """
+    return dest.index_add_(0, index, src.to(dest.dtype))
+
+
 def seg_softmax(logits: torch.Tensor, index: torch.Tensor, n: int) -> torch.Tensor:
     """Softmax of `logits` [E, H] over groups given by `index` [E] (destination nodes).
 
@@ -126,6 +138,8 @@ class GeoTensorAttention(nn.Module):
         # promotes back to float32 and `index_add_` into a bf16 buffer raises. Edge geometry is brought to the
         # stream's dtype once, here, rather than patched at each accumulation.
         dt = x.dtype
+        V = V.to(dt) if V is not None else None
+        T = T.to(dt) if T is not None else None
         r = (pos[dst] - pos[src]).to(dt)
         d = r.norm(dim=1).clamp(min=1e-6)
         u = r / d[:, None]
@@ -157,7 +171,7 @@ class GeoTensorAttention(nn.Module):
             m_x = m_x + next(g) * utu
         else:
             next(g)
-        dx = torch.zeros_like(x).index_add_(0, dst, a * m_x)
+        dx = add_into(torch.zeros_like(x), dst, a * m_x)
         dV = dT = None
         if self.use_vectors:
             Wv = torch.einsum("efc,fg->egc", Vj, self.wv.weight.t())
@@ -166,17 +180,17 @@ class GeoTensorAttention(nn.Module):
                 m_v = m_v + next(g)[..., None] * Tu
             else:
                 next(g)
-            dV = torch.zeros_like(V).index_add_(0, dst, a[..., None] * m_v)
+            dV = add_into(torch.zeros_like(V), dst, a[..., None] * m_v)
         if self.use_tensors:
             Wt = torch.einsum("efij,fg->egij", Tj, self.wt.weight.t())
             uu = (u[:, :, None] * u[:, None, :] - EYE.to(u) / 3.0)[:, None]  # [E, 1, 3, 3]
             m_t = next(g)[..., None, None] * Wt + next(g)[..., None, None] * uu + next(g)[..., None, None] * sym_traceless(Vj, u[:, None, :].expand_as(Vj))
-            dT = torch.zeros_like(T).index_add_(0, dst, a[..., None, None] * m_t)
-        x = x + self.drop(dx)
+            dT = add_into(torch.zeros_like(T), dst, a[..., None, None] * m_t)
+        x = x + self.drop(dx).to(x.dtype)
         if dV is not None:
-            V = V + dV
+            V = V + dV.to(V.dtype)
         if dT is not None:
-            T = T + dT
+            T = T + dT.to(T.dtype)
         # node-wise tensor refinement: invariants (and pseudo-scalars) gate equivariant self-interactions
         ninv = [x]
         if self.use_vectors:
@@ -279,8 +293,13 @@ class SiteDecoder(nn.Module):
         if not len(conf_logit):
             z = xp.new_zeros(0)
             return dict(site_logit=z, site_center=xp.new_zeros((0, 3)), site_member=xp.new_zeros((0, 0)))
-        conf, occ = torch.sigmoid(conf_logit), torch.sigmoid(occ_logit)
-        idx = self.seeds(conf_logit.detach(), center.detach())
+        # The geometry arrives in float32 (positions are never cast) and the features in the stream's dtype, so
+        # membership and centres are computed in float32 -- they are coordinates -- and brought to the stream only
+        # where they meet the weights.
+        dt = xp.dtype
+        conf, occ = torch.sigmoid(conf_logit.float()), torch.sigmoid(occ_logit.float())
+        center = center.float()
+        idx = self.seeds(conf_logit.detach().float(), center.detach())
         seed_c = center[idx]                                             # [S, 3]
         d = torch.cdist(seed_c, center)                                  # [S, P]
         # Soft membership, so the gradient reaches every probe that supports a site rather than only its seed.
@@ -288,10 +307,11 @@ class SiteDecoder(nn.Module):
         w = w * conf[None, :].clamp(min=1e-3)                            # a probe speaks for a site in proportion to its own confidence
         mass = w.sum(1, keepdim=True).clamp(min=1e-6)
         site_center = w @ center / mass                                  # convex combination of positions: equivariant
-        feats = torch.cat([w @ xp / mass, w @ vnorm / mass,
-                           self.summaries(w, occ, conf, center, site_center, probe_pos)], -1)
+        wd, massd = w.to(dt), mass.to(dt)
+        feats = torch.cat([wd @ xp / massd, wd @ vnorm.to(dt) / massd,
+                           self.summaries(w, occ, conf, center, site_center, probe_pos.float()).to(dt)], -1)
         h = self.token(feats)
-        bias_in = self.rbf(torch.cdist(site_center, site_center).reshape(-1)).reshape(len(h), len(h), -1)
+        bias_in = self.rbf(torch.cdist(site_center, site_center).reshape(-1)).reshape(len(h), len(h), -1).to(dt)
         for qkv, bias, proj, ff, n1, n2 in zip(self.qkv, self.bias, self.proj, self.ff, self.n1, self.n2):
             q, k, v = qkv(n1(h)).chunk(3, dim=-1)
             q = q.reshape(-1, self.heads, self.hd); k = k.reshape(-1, self.heads, self.hd)

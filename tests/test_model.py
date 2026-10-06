@@ -495,3 +495,43 @@ def test_a_full_step_survives_cudas_autocast_policy_simulated_on_cpu(monkeypatch
                 + M.site_rank_loss(out["site_logit"], out["site_center"], torch.tensor([[0.0, 0.0, 0.0]])))
     loss.backward()
     assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in net.parameters())
+
+
+def _to_bf16_stream(b):
+    """Node features in bf16, geometry left in float32: the dtype mixture a GPU run actually sees.
+
+    This does not use autocast on purpose. Autocast's promotion list differs between its CPU and CUDA
+    implementations, so a CPU autocast test can pass while the CUDA run dies -- which happened twice. Setting the
+    dtypes by hand reproduces the mixture deterministically on any machine: the parameters and the residual stream
+    are bf16, while `pos` and `vec0` arrive from the feature cache as float32 and are never cast by the loader.
+    """
+    c = dict(b)
+    for k in list(c):
+        if k.startswith("feat_") or k == "site_probe_mask":
+            c[k] = c[k].to(torch.bfloat16)
+    return c
+
+
+@pytest.mark.parametrize("use_tensors,chiral,recycles", [(True, True, 0), (True, True, 2), (False, False, 0)])
+def test_a_bf16_stream_with_float32_geometry_runs(use_tensors, chiral, recycles):
+    """Every accumulation must take a float32 intermediate without raising, whatever promotes where."""
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, use_tensors=use_tensors,
+                        chiral=chiral, recycles=recycles, site_decoder=True).to(torch.bfloat16).eval()
+    with torch.no_grad():
+        out = net(_to_bf16_stream(_batch()))
+    assert out["occ_logit"].dtype == torch.bfloat16
+    assert torch.isfinite(out["occ_logit"].float()).all()
+    assert torch.isfinite(out["site_logit"].float()).all()
+
+
+def test_a_bf16_stream_takes_a_training_step():
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4,
+                        site_decoder=True).to(torch.bfloat16)
+    out = net(_to_bf16_stream(_batch()))
+    loss = (out["occ_logit"].float().mean() + out["conf_logit"].float().mean()
+            + M.site_rank_loss(out["site_logit"].float(), out["site_center"].float(),
+                               torch.tensor([[0.0, 0.0, 0.0]])))
+    loss.backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad.float()).all() for p in net.parameters())
