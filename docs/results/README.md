@@ -154,6 +154,38 @@ Every one of those structures already falls in the `train-similar` row, which th
 there regardless of identity, so the headline row — structures *not* similar to our training manifest — is unaffected.
 The risk the finding describes is real for anyone training at PLINDER scale; at our scale it is not what limits us.
 
+## The first finished comparison with a modern deep-learning method (2026-10-06)
+
+DeepPocket (Aggarwal 2021) run end to end through its own pipeline -- its `clean_pdb`, fpocket, its `get_centers`,
+its gridding and its published CNN weights -- on COACH420, converted into our candidate table and scored with the
+identical labels, ligand rule, non-redundancy and receptor as every other method here. 286 structures predicted,
+281 shared with every method in the table.
+
+**The 173 structures not similar to our training manifest:**
+
+| method | top-1 | top-N | top-(N+2) | predictions | ceiling |
+|---|---|---|---|---|---|
+| **ours** (ranker, 32 features) | **0.699** | 0.775 | 0.873 | 30.0 | 0.988 |
+| **DeepPocket** (2021 CNN, published weights) | **0.699** | 0.775 | 0.884 | 37.1 | 0.965 |
+| P2Rank 2.5.1 (2018 random forest) | 0.751 | 0.827 | 0.879 | 9.6 | 0.931 |
+| our detector, no ranking | 0.595 | 0.711 | 0.821 | 30.0 | 0.988 |
+
+Paired cluster bootstrap, us against DeepPocket on the same structures: **top-1 +0.000 [-0.071, +0.072]**, top-N
++0.000 [-0.063, +0.059]. The agreement to three decimals is a coincidence; the interval is the result. DeepPocket
+against P2Rank is -0.052 [-0.124, +0.017], the same deficit as ours with the same interval including zero.
+
+Two things follow, and the second is the uncomfortable one. We are **not worse** than a modern deep-learning
+predictor with published weights, which is the first such statement this project can make from its own paired
+measurement rather than from someone else's table. And neither of us is distinguishable from a random forest from
+2018 -- which is the pattern the literature already shows, with P2Rank winning DCA on HOLO4K and PDBbind inside
+VN-EGNN's own table and the fpocket+PRANK hybrid placing first of thirteen in LIGYSIS.
+
+Detection is again not where we lose: our ceiling is 0.988 against DeepPocket's 0.965 and P2Rank's 0.931. The same
+diagnosis as before, now confirmed against a learned method and not only against a geometric one.
+
+Files: `compare_coach420_vs_deeppocket.md` (differences taken against P2Rank) and
+`compare_coach420_vs_deeppocket_ref.md` (against DeepPocket). GrASP and DeepSurf are still running.
+
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
 The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run
