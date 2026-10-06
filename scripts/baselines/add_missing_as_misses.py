@@ -36,6 +36,13 @@ def main():
     if not attempted_file.exists():
         sys.exit(f"{attempted_file} is missing: cannot tell what the tool was asked to predict")
     attempted = {l.strip() for l in attempted_file.read_text().splitlines() if l.strip()}
+    # A structure our own pipeline failed on is not the method refusing to predict, and scoring it as a miss would
+    # charge the method for our environment. The drivers record those separately.
+    failed_file = attempted_file.parent / "failed.txt"
+    failed = {l.strip() for l in failed_file.read_text().splitlines() if l.strip()} if failed_file.exists() else set()
+    if failed:
+        print(f"  excluding {len(failed)} structures our pipeline failed on, which are not refusals")
+    attempted -= failed
     ours = pd.read_csv(DS / f"eval_candidates_{a.set}{a.our_tag}.csv")
     labelled = dict(ours.groupby("pdb")["n_sites"].first())      # structures whose labels exist, with their N
 

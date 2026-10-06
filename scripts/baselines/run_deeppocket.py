@@ -165,15 +165,21 @@ def main():
             done += 1
             with open(attempted, "a") as fh:
                 fh.write(f"{r['pdb']}\n")
-            if sites:
+            if sites is None:
+                # Our pipeline failed on this structure, which is not the method answering. Recorded apart so it is
+                # excluded rather than scored as a refusal -- charging a method for our environment is a thumb on
+                # the scale against it.
+                with open(chunk_dir / "failed.txt", "a") as fh:
+                    fh.write(f"{r['pdb']}\n")
+            else:
                 codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
                 ligs = [l for l in structure.read_ligands(path, min_heavy=8,
                                                           exclude=EXCLUDE if codes is None else set())
                         if (codes is None or l["comp"] in codes)]
                 if ligs and not sites:
-                    # The method was asked and answered "no site here". That is a prediction and a wrong one, so it
-                    # has to appear in the table: a structure with no row at all drops out of the intersection that
-                    # `compare_on_set.py` takes, which would quietly delete this method's failures from its own score.
+                    # The method ran and answered "no site here". That is a prediction and a wrong one, so it must
+                    # appear in the table: a structure with no row at all drops out of the intersection that
+                    # `compare_on_set.py` takes, which would quietly delete this method's failures from its score.
                     batch_recs.append(dict(
                         pdb=r["pdb"], center="nan;nan;nan", tool_score=float("-inf"), tool_rank=1, tool_rel=0.0,
                         dca=float("inf"), dcc_min=float("inf"), label=0,

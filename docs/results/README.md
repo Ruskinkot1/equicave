@@ -191,33 +191,46 @@ VN-EGNN's own table and the fpocket+PRANK hybrid placing first of thirteen in LI
 Detection is again not where we lose: our ceiling is 0.988 against DeepPocket's 0.965 and P2Rank's 0.931. The same
 diagnosis as before, now confirmed against a learned method and not only against a geometric one.
 
-### GrASP as well, and the two modern methods disagree with each other
+### GrASP as well: three learned methods, and none of them beats a 2018 random forest
 
 GrASP (Tiwary 2024) driven through its own parse, inference and mean-shift clustering. All four methods on the
-**174 structures not similar to our training manifest**, same labels, ligand rule, receptor and non-redundancy:
+**170 structures not similar to our training manifest** (279 in common overall), same labels, ligand rule, receptor
+and non-redundancy:
 
 | method | top-1 | top-N | top-(N+2) | predictions | ceiling |
 |---|---|---|---|---|---|
-| P2Rank 2.5.1 (2018) | **0.753** | **0.828** | 0.879 | 9.6 | 0.931 |
-| **ours** (ranker) | 0.701 | 0.776 | 0.874 | 30.0 | **0.989** |
-| DeepPocket (2021) | 0.695 | 0.770 | 0.879 | 36.9 | 0.960 |
-| GrASP (2024) | 0.661 | 0.701 | 0.724 | 2.0 | 0.724 |
+| P2Rank 2.5.1 (2018) | **0.759** | **0.829** | 0.876 | 9.6 | 0.929 |
+| **ours** (ranker) | 0.706 | 0.782 | **0.882** | 30.0 | **0.994** |
+| DeepPocket (2021) | 0.700 | 0.776 | **0.882** | 36.6 | 0.959 |
+| GrASP (2024) | 0.676 | 0.718 | 0.741 | 2.1 | 0.741 |
 
-Paired cluster bootstrap against P2Rank: ours **-0.052 [-0.121, +0.011]**, DeepPocket **-0.057 [-0.129, +0.011]**,
-GrASP **-0.092 [-0.169, -0.017]**. The first two intervals include zero; GrASP's does not. So on this benchmark a
-2018 random forest is indistinguishable from us and from a 2021 CNN, and beats a 2024 graph attention network.
+Paired cluster bootstrap against P2Rank on those structures: ours **-0.053 [-0.124, +0.017]**, DeepPocket
+**-0.059 [-0.135, +0.012]**, GrASP **-0.082 [-0.166, +0.000]**. All three intervals reach zero. On this benchmark a
+random forest from 2018 is not beaten by a 2021 CNN, a 2024 graph attention network, or us -- and none of the three
+differences is significant either.
 
-**The by-site-count split explains GrASP rather than condemning it.** On the 77 single-site structures GrASP
-reaches 0.714, *above* our 0.701 and DeepPocket's 0.701 and behind only P2Rank's 0.792. On the 40 structures with
-three or more sites it collapses to 0.575 against our 0.900. It emits 2.0 predictions per structure to our 30 and
-P2Rank's 9.6: it is built for precision -- its own paper reports precision at top-3 of 71.2 against P2Rank's 41.0
--- and a method that proposes two sites cannot cover a protein that has four. Comparing it on top-N is comparing
-designs, not rankings. On the axis where the design is not the limit, it is the best of the three learned methods.
+**GrASP's shape, not its ranking, is what the top-N column measures.** It emits 2.1 predictions per structure to
+our 30 and P2Rank's 9.6, because it is built for precision -- its own paper reports precision at top-3 of 71.2
+against P2Rank's 41.0. Split by the structure's own number of sites, on the 77 single-site structures it reaches
+0.714, above our 0.706 and DeepPocket's 0.700; at two sites 0.800; and on the 38 with three or more it falls to
+0.605 against our 0.900, because two predictions cannot cover four pockets. Comparing it on top-N compares designs.
 
-Us against GrASP directly: top-1 +0.040 [-0.040, +0.118], top-(N+2) **+0.149 [+0.085, +0.215]**.
+**Two corrections were needed before any of this could be quoted, and the second reversed a claim.**
+
+*Refusals count as misses.* `compare_on_set.py` intersects the structures each method predicted, so a structure a
+method answers with no site at all would vanish from the comparison instead of counting against it -- a silent
+favour to the most conservative method. DeepPocket refuses 2 of 300, GrASP 22. The drivers now record a refusal as
+a miss and `add_missing_as_misses.py` repairs an older table.
+
+*Our failures do not.* A structure **our** pipeline died on is not the method refusing, and scoring it as a miss
+charges the method for our environment. Five of the structures first counted against GrASP were of that kind. With
+them excluded its ceiling rises from 0.771 to 0.784 and its paired difference against P2Rank moves from
+-0.092 [-0.169, -0.017] to -0.082 [-0.166, +0.000] -- **from significant to not**. An earlier version of this
+section claimed GrASP was significantly worse than P2Rank; that claim was an artefact of our own crashes and is
+withdrawn. The drivers now keep a `failed.txt` apart from the attempted list.
 
 Files: `compare_coach420_vs_dl.md` (all four, differences against P2Rank), `compare_coach420_vs_deeppocket_ref.md`
-and `compare_coach420_vs_grasp_ref.md` (differences against each of those two). DeepSurf is still running.
+and `compare_coach420_vs_grasp_ref.md`. DeepSurf is still running.
 
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 

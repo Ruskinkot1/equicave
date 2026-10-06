@@ -147,29 +147,36 @@ def main():
             done += 1
             with open(attempted, "a") as fh:
                 fh.write(f"{pdb_id}\n")
-            if sites:
-                codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
-                ligs = [l for l in structure.read_ligands(path, min_heavy=8,
-                                                          exclude=EXCLUDE if codes is None else set())
-                        if (codes is None or l["comp"] in codes)]
-                if ligs and not sites:
-                    # The method was asked and answered "no site here". That is a prediction and a wrong one, so it
-                    # has to appear in the table: a structure with no row at all drops out of the intersection that
-                    # `compare_on_set.py` takes, which would quietly delete this method's failures from its own score.
+            if sites is None:
+                # Our environment failed on this structure (their process died: a large one can exhaust memory),
+                # which is not the method answering. Recorded apart so it can be excluded rather than scored as a
+                # refusal -- charging a method for our memory would be a thumb on the scale against it.
+                with open(chunk_dir / "failed.txt", "a") as fh:
+                    fh.write(f"{pdb_id}\n")
+                bar.update(1, postfix=f"{len(recs) + len(batch_recs)} predictions from {done} structures")
+                continue
+            codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None
+            ligs = [l for l in structure.read_ligands(path, min_heavy=8,
+                                                      exclude=EXCLUDE if codes is None else set())
+                    if (codes is None or l["comp"] in codes)]
+            if ligs and not sites:
+                # The method ran and answered "no site here". That is a prediction and a wrong one, so it has to
+                # appear in the table: a structure with no row at all drops out of the intersection that
+                # `compare_on_set.py` takes, which would quietly delete this method's failures from its own score.
+                batch_recs.append(dict(
+                    pdb=r["pdb"], center="nan;nan;nan", tool_score=float("-inf"), tool_rank=1, tool_rel=0.0,
+                    dca=float("inf"), dcc_min=float("inf"), label=0,
+                    n_sites=len(LB.group_sites(ligs)), n_cands=0))
+            elif ligs and sites:
+                groups = LB.group_sites(ligs)
+                site_atoms = [np.vstack([ligs[j]["xyz"] for j in g]) for g in groups]
+                L = np.vstack([l["xyz"] for l in ligs])
+                for rank, (centre, score) in enumerate(sites, 1):
                     batch_recs.append(dict(
-                        pdb=r["pdb"], center="nan;nan;nan", tool_score=float("-inf"), tool_rank=1, tool_rel=0.0,
-                        dca=float("inf"), dcc_min=float("inf"), label=0,
-                        n_sites=len(LB.group_sites(ligs)), n_cands=0))
-                if ligs and sites:
-                    groups = LB.group_sites(ligs)
-                    site_atoms = [np.vstack([ligs[j]["xyz"] for j in g]) for g in groups]
-                    L = np.vstack([l["xyz"] for l in ligs])
-                    for rank, (centre, score) in enumerate(sites, 1):
-                        batch_recs.append(dict(
-                            pdb=r["pdb"], center=";".join(f"{x:.2f}" for x in centre),
-                            tool_score=score, tool_rank=rank, tool_rel=score / max(1e-9, sites[0][1]),
-                            dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
-                            label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
+                        pdb=r["pdb"], center=";".join(f"{x:.2f}" for x in centre),
+                        tool_score=score, tool_rank=rank, tool_rel=score / max(1e-9, sites[0][1]),
+                        dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
+                        label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
             if len(batch_recs) >= 100:
                 pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
                 part += 1; recs += batch_recs; batch_recs = []
