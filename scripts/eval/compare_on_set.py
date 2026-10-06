@@ -53,7 +53,13 @@ def main():
     ap.add_argument("--tag", default="", help="suffix of the eval_candidates_<set><tag>.csv to read, as passed to "
                     "evaluate.py --tag; the receptor protocol must match the baselines', which see every chain")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
+    # `--tag` names an input, so without this a probe run -- a partial tool table, a different ligand rule --
+    # overwrites the published comparison for that tag and nothing says so.
+    ap.add_argument("--out-tag", dest="out_tag", default=None,
+                    help="suffix of the written compare_<set><out-tag>.md/.json; defaults to --tag")
     a = ap.parse_args()
+    if a.out_tag is None:
+        a.out_tag = a.tag
 
     ours = pd.read_csv(DS / f"eval_candidates_{a.set}{a.tag}.csv")
     train_cl = train_clusters()
@@ -159,11 +165,11 @@ def main():
                                  f"{o.topN.mean() - r.topN.mean():+.3f} | {o.ceiling.mean():.3f} | {r.ceiling.mean():.3f} |")
 
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    (out / f"compare_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
+    (out / f"compare_{a.set}{a.out_tag}.md").write_text("\n".join(lines) + "\n")
     clean = {s: {m: {k: v for k, v in st.items() if k != "_per"} for m, st in d.items()} for s, d in results.items()}
     # Which of our eval tables was compared against which tool tables, so the row cannot be read without knowing
     # the protocol behind it.
-    (out / f"compare_{a.set}{a.tag}.json").write_text(json.dumps(dict(
+    (out / f"compare_{a.set}{a.out_tag}.json").write_text(json.dumps(dict(
         set=a.set, n_common=len(common), ref=ref, run=dict(vars(a)), results=clean), indent=1))
     print("\n".join(lines))
 
