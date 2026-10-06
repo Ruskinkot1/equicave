@@ -1,6 +1,7 @@
 # raw and third-party data: never committed
 data/pockets_ds/
 data/processed/*_chunks/
+data/processed/*/attempted.txt
 # the per-point training table is tens of millions of rows and regenerable by `make points` in about half an hour;
 # what the ranker consumes is the small derived point_features_<tag> table, which is committed
 data/processed/points_*.csv.gz
