@@ -170,7 +170,15 @@ def main():
                 ligs = [l for l in structure.read_ligands(path, min_heavy=8,
                                                           exclude=EXCLUDE if codes is None else set())
                         if (codes is None or l["comp"] in codes)]
-                if ligs:
+                if ligs and not sites:
+                    # The method was asked and answered "no site here". That is a prediction and a wrong one, so it
+                    # has to appear in the table: a structure with no row at all drops out of the intersection that
+                    # `compare_on_set.py` takes, which would quietly delete this method's failures from its own score.
+                    batch_recs.append(dict(
+                        pdb=r["pdb"], center="nan;nan;nan", tool_score=float("-inf"), tool_rank=1, tool_rel=0.0,
+                        dca=float("inf"), dcc_min=float("inf"), label=0,
+                        n_sites=len(LB.group_sites(ligs)), n_cands=0))
+                if ligs and sites:
                     groups = LB.group_sites(ligs)
                     site_atoms = [np.vstack([ligs[j]["xyz"] for j in g]) for g in groups]
                     L = np.vstack([l["xyz"] for l in ligs])

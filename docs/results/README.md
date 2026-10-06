@@ -165,14 +165,22 @@ identical labels, ligand rule, non-redundancy and receptor as every other method
 
 | method | top-1 | top-N | top-(N+2) | predictions | ceiling |
 |---|---|---|---|---|---|
-| **ours** (ranker, 32 features) | **0.699** | 0.775 | 0.873 | 30.0 | 0.988 |
-| **DeepPocket** (2021 CNN, published weights) | **0.699** | 0.775 | 0.884 | 37.1 | 0.965 |
-| P2Rank 2.5.1 (2018 random forest) | 0.751 | 0.827 | 0.879 | 9.6 | 0.931 |
-| our detector, no ranking | 0.595 | 0.711 | 0.821 | 30.0 | 0.988 |
+| **ours** (ranker, 32 features) | **0.701** | 0.776 | 0.874 | 30.0 | 0.989 |
+| **DeepPocket** (2021 CNN, published weights) | **0.695** | 0.770 | 0.879 | 36.9 | 0.960 |
+| P2Rank 2.5.1 (2018 random forest) | 0.753 | 0.828 | 0.879 | 9.6 | 0.931 |
+| our detector, no ranking | 0.598 | 0.713 | 0.822 | 30.0 | 0.989 |
 
-Paired cluster bootstrap, us against DeepPocket on the same structures: **top-1 +0.000 [-0.071, +0.072]**, top-N
-+0.000 [-0.063, +0.059]. The agreement to three decimals is a coincidence; the interval is the result. DeepPocket
-against P2Rank is -0.052 [-0.124, +0.017], the same deficit as ours with the same interval including zero.
+Paired cluster bootstrap, us against DeepPocket on the same 174 structures: **top-1 +0.006 [-0.069, +0.081]**,
+top-N +0.006 [-0.054, +0.068]. A tie. DeepPocket against P2Rank is -0.049 [-0.101, +0.003] on all 283, the same
+deficit as ours with an interval that includes zero.
+
+**One correction was needed before these numbers could be trusted.** `compare_on_set.py` intersects the structures
+each method predicted, so a structure a method answers with *no site at all* disappears from the comparison rather
+than counting against it -- a silent favour to any conservative method, and every such structure is a guaranteed
+miss. DeepPocket refuses 2 of 300; GrASP, whose clustering returns nothing when no atom passes its threshold,
+refuses 9 %. The three drivers now write a refusal as a miss, `add_missing_as_misses.py` repairs a table produced
+before they did, and the numbers above are after that repair (it moved DeepPocket's ceiling from 0.962 to 0.960
+and its top-1 from 0.699 to 0.695).
 
 Two things follow, and the second is the uncomfortable one. We are **not worse** than a modern deep-learning
 predictor with published weights, which is the first such statement this project can make from its own paired
