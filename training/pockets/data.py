@@ -111,8 +111,17 @@ def knn_edges(pos: np.ndarray, types: np.ndarray, k_scale: float = 1.0) -> tuple
 def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_probe: int = 768, n_surf: int = 512,
               seed: int = 0, entries: dict | None = None, k_scale: float = 1.0, druglike_only: bool = False,
               require_interaction: bool = True, residue_chemistry: bool = True,
-              probe_potential: bool = True) -> dict | None:
-    """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable."""
+              probe_potential: bool = True, probe_model=None,
+              probe_ligandable_frac: float = 0.5) -> dict | None:
+    """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable.
+
+    `probe_model`: an optional per-point ligandability booster. Probes are the one component the ablation shows to
+    matter -- removing them costs 0.263 site top-1, where every other component is within two seed standard
+    deviations of zero -- so which free points become probes is the highest-leverage choice in the architecture.
+    Without a model the points are ordered at random inside each buriedness tier; with one they are ordered by
+    predicted ligandability inside each tier, which spends the probe budget on the points a ligand atom is likely to
+    occupy while the tiers still guarantee coverage of every cavity.
+    """
     rng = np.random.default_rng(seed)
     st = structure.read_pdb(pdb_path)
     if len(st["xyz"]) < 50:
@@ -143,7 +152,25 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         return None
     b_all = bur[tuple(idx.T)]
     deep = b_all >= detect.DETECT_MIN_BURIED
-    order = np.concatenate([rng.permutation(np.where(deep)[0]), rng.permutation(np.where(~deep)[0])])[:n_probe]
+    if probe_model is not None:
+        # Part of the budget goes to the points the per-point model likes, the rest keeps the original tiered random
+        # order. Spending all of it on the best-scoring points is measurably wrong rather than merely aggressive:
+        # on one structure it put 0.895 of the probes within 4 A of a ligand against 0.277 at random, which sounds
+        # like a win until you remember the site head's job is to *reject* the other cavities. With almost no probes
+        # left outside the true site there are almost no negatives to learn from. The fraction is the knob, and
+        # `probe_tiered` (fraction 0) is the comparison arm.
+        from equicave import point_score as ps
+        all_pts = (lo + idx * pk.GRID).astype(np.float32)
+        types_s = LB.protein_atom_types(st)
+        trees_s = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types_s.items()}
+        sc = probe_model.predict(ps.point_features(all_pts, st, tree, trees_s))
+        n_lig = int(round(n_probe * float(probe_ligandable_frac)))
+        by_score = np.argsort(-sc)[:n_lig]
+        rest = np.concatenate([rng.permutation(np.where(deep)[0]), rng.permutation(np.where(~deep)[0])])
+        rest = rest[~np.isin(rest, by_score)]
+        order = np.concatenate([by_score, rest])[:n_probe]
+    else:
+        order = np.concatenate([rng.permutation(np.where(deep)[0]), rng.permutation(np.where(~deep)[0])])[:n_probe]
     idx = idx[order]
     ppos = (lo + idx * pk.GRID).astype(np.float32)
     pb = bur[tuple(idx.T)].astype(np.float32); pd_ = dist[tuple(idx.T)].astype(np.float32)
@@ -333,8 +360,15 @@ def random_rotation(b: dict, rng: np.random.Generator):
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
                 n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
                 require_interaction: bool = True, residue_chemistry: bool = True,
-                probe_potential: bool = True) -> list[str]:
-    """Featurise every manifest structure once; returns the list of cached ids. Idempotent."""
+                probe_potential: bool = True, probe_sampling: str = "tiered",
+                point_model_tag: str = "", probe_ligandable_frac: float = 0.5) -> list[str]:
+    """Featurise every manifest structure once; returns the list of cached ids. Idempotent.
+
+    `probe_sampling="ligandable"` places the probes by the per-point model instead of at random within each tier.
+    Leakage is avoided by construction: a structure in fold k is scored by the point model trained **without** fold
+    k (`models/point_<tag>_fold<k>.txt`), the same out-of-fold discipline the ranker's aggregates use, so the
+    network never sees probe positions chosen with knowledge of its own structure's ligands.
+    """
     import csv
     from training.pockets.esm_embed import Embedder, cached
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +378,23 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
     emb = Embedder(esm_name, device) if esm_name else None
     comps = sorted({l[0] for r in rows for l in json.loads(r["ligands"])})
     entries = {c: ccd.load(c) for c in comps}
+
+    fold_models = {}
+    if probe_sampling == "ligandable":
+        import lightgbm as lgb
+        root = Path(__file__).resolve().parents[2] / "models"
+        tag = point_model_tag or "native"
+        for k in sorted({int(r["fold"]) for r in rows}):
+            f_k = root / f"point_{tag}_fold{k}.txt"
+            if not f_k.exists():
+                raise FileNotFoundError(
+                    f"probe_sampling=ligandable needs {f_k}: train the per-point model first "
+                    f"(scripts/train/build_points.py then train_point_model.py --tag {tag}). The per-fold models "
+                    f"are required rather than the full-data one, so a structure is never scored by a model that "
+                    f"saw its own ligands.")
+            fold_models[k] = lgb.Booster(model_file=str(f_k))
+        log(f"probe placement by ligandability, out of fold, from models/point_{tag}_fold*.txt")
+
     done = []
     for i, r in enumerate(rows, 1):
         f = out_dir / f"{r['pdb']}.npz"; p = pdb_dir / f"{r['pdb']}.pdb"
@@ -356,7 +407,9 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
             e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
             d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
                           druglike_only=druglike_only, require_interaction=require_interaction,
-                          residue_chemistry=residue_chemistry, probe_potential=probe_potential)
+                          residue_chemistry=residue_chemistry, probe_potential=probe_potential,
+                          probe_model=fold_models.get(int(r["fold"])),
+                          probe_ligandable_frac=probe_ligandable_frac)
             if d is not None and "y_res" in d:
                 d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                 save(d, f); done.append(r["pdb"])

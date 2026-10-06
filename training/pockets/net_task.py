@@ -366,7 +366,9 @@ def run(a) -> int:
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))
     log(f"config: {json.dumps(cfg)}")
     ids = D.build_cache(Path(dc["manifest"]), Path(dc["pdb_dir"]), cache, dc.get("esm"), dc.get("limit", 0), dc["n_probe"], dc["n_surf"], str(device), log, dc.get("k_scale", 1.0), dc.get("druglike_only", False), dc.get("require_interaction", True),
-                       dc.get("residue_chemistry", True), dc.get("probe_potential", True))
+                       dc.get("residue_chemistry", True), dc.get("probe_potential", True),
+                       dc.get("probe_sampling", "tiered"), dc.get("point_model_tag", ""),
+                       dc.get("probe_ligandable_frac", 0.5))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold

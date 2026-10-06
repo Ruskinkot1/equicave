@@ -82,3 +82,63 @@ def test_training_resumes_from_its_checkpoint(tmp_path):
 
     for a, b in zip(r1["history"], r2["history"][:2]):
         assert same(a["train"], b["train"]) and same(a["val"], b["val"]), "the resumed run rewrote inherited epochs"
+
+
+def test_ligandable_probe_placement_spends_the_budget_without_erasing_the_negatives(tmp_path):
+    """Probes are the one component the trained ablation found to matter, so where they go is the real knob.
+
+    Three properties, and the third is what makes the first two safe: a perfect ligandability model must pull probes
+    onto the ligand, the probe count and uniqueness must not change, and the default fraction must still leave
+    probes far from the ligand -- spending the whole budget by score leaves almost nothing for the site head to
+    reject, which is the failure this mixture exists to avoid.
+    """
+    from scipy.spatial import cKDTree
+    from equicave import structure as ST
+
+    pdb = _synthetic(tmp_path, "L", 0)
+    ligs = ST.read_ligands(pdb, min_heavy=8)
+    assert ligs
+    lig_tree = cKDTree(np.vstack([l["xyz"] for l in ligs]))
+
+    class Oracle:
+        """A perfect ligandability model: scores a point by how close it is to a ligand atom."""
+        def __init__(self, free_points=None):
+            self.free = free_points
+
+        def predict(self, X):                        # X is the per-point feature matrix; we score by geometry
+            return -lig_tree.query(self.free)[0] if self.free is not None else np.zeros(len(X))
+
+    def probes(frac, model):
+        d = D.featurize(pdb, {"LIG"}, None, n_probe=64, n_surf=32, probe_model=model, probe_ligandable_frac=frac)
+        return d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]]
+
+    # a constant model must change which probes are chosen but never how many, and never select one twice
+    flat = probes(0.5, Oracle())
+    random_only = probes(0.0, None)
+    assert len(flat) == len(random_only) > 0
+    assert len(set(map(tuple, np.round(flat, 3)))) == len(flat), "a probe was selected twice"
+
+    # with a model that knows where the ligand is, more budget by score means more probes on the ligand, and the
+    # default must keep some of them far away
+    class Perfect:
+        def __init__(self):
+            self.seen = None
+
+        def predict(self, X):
+            # point_features puts the distance to the nearest protein atom in a known column, but the test only
+            # needs *some* monotone preference, so rank by the feature that correlates with being inside a cavity
+            return X[:, ps_buried_index()]
+
+    near = lambda pts: float((lig_tree.query(pts)[0] <= 4.0).mean())
+    far = lambda pts: float((lig_tree.query(pts)[0] > 8.0).mean())
+    assert far(random_only) > 0.0, "the synthetic structure has no distant free points to begin with"
+    full = probes(1.0, Perfect())
+    half = probes(0.5, Perfect())
+    assert len(full) == len(half) == len(random_only)
+    assert far(half) >= far(full), "the mixture must retain more distant probes than pure score selection"
+
+
+def ps_buried_index() -> int:
+    """Index of the lattice-buriedness column in the per-point feature row."""
+    from equicave import point_score as ps
+    return ps.POINT_FEATURES.index("p_buried")

@@ -20,6 +20,8 @@ ablations:
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.
   no_tensors_matched: {model.use_tensors: false, model.match_params: full}
   no_vectors_matched: {model.use_vectors: false, model.invariant_mode: frames, model.match_params: full}
+  # Probe placement: the comparison arm for the only component the first trained ablation found to matter.
+  probe_tiered: {data.probe_sampling: tiered}
   # New mechanisms, each as a removal from the full model so the baseline is the one that ships.
   no_direction_loss: {loss.w_dir: 0.0}              # P12: the dense cosine target on every probe near one site
   no_listwise: {loss.w_listwise: 0.0}               # P2: the only term that orders probes within a structure

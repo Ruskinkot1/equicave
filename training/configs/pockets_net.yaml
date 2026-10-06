@@ -10,6 +10,19 @@ data:
   require_interaction: true    # hotspot labels only where the ligand atom really makes that interaction
   druglike_only: false         # true: train the field on drug-like ligands only
   probe_potential: true        # per-probe interaction potential as input channels and as a masked target
+  # Where the probes go. The first trained ablation says probes are the architecture: removing them costs 0.263
+  # site top-1, while the surface module, the language model, the degree-2 channels and chirality are all within
+  # two seed standard deviations of zero. `ligandable` spends the probe budget by the per-point model's prediction
+  # instead of at random inside each buriedness tier, using the fold models so no structure is scored by a model
+  # that saw its ligands. `tiered` is the previous behaviour and the comparison arm.
+  probe_sampling: ligandable   # ligandable | tiered
+  point_model_tag: native      # which models/point_<tag>_fold*.txt to place probes with
+  # Fraction of the probe budget placed by score; the rest keeps the tiered random order. Measured on one structure:
+  # at 1.0 only 0.4 % of probes sit more than 8 A from a ligand, so the site head has almost nothing to reject; at
+  # 0.5 a third of the probes are occupied and a third are far negatives. `occ_pos_weight` below was chosen for the
+  # 18 % positive rate of random placement and is deliberately left unchanged, so this arm isolates placement and
+  # not class weighting -- retune it separately once placement is settled.
+  probe_ligandable_frac: 0.5
 split:
   val_fold: 0                            # 5-fold CV by cluster: run once per fold
 model:
