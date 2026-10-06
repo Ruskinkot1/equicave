@@ -139,14 +139,13 @@ def main():
             tasks.append((r["pdb"], path))
     print(f"{len(tasks)} structures with a local file", flush=True)
 
-    batch_recs, done = [], 0
+    batch_recs, pending_ids, done = [], [], 0
     with tempfile.TemporaryDirectory() as tmp, progress.Bar(f"DeepSurf on {a.set}", len(tasks), unit="pdb") as bar:
         for pdb_id, sites in predict_batch(a, tasks, pathlib.Path(tmp), chunk_dir / "their_stderr.log"):
             r = by_id[pdb_id]
             path = dict(tasks)[pdb_id]
             done += 1
-            with open(attempted, "a") as fh:
-                fh.write(f"{pdb_id}\n")
+            pending_ids.append(pdb_id)
             if sites is None:
                 # Our environment failed on this structure (their process died: a large one can exhaust memory),
                 # which is not the method answering. Recorded apart so it can be excluded rather than scored as a
@@ -177,13 +176,23 @@ def main():
                         tool_score=score, tool_rank=rank, tool_rel=score / max(1e-9, sites[0][1]),
                         dca=pk.dca(centre, L), dcc_min=min(pk.dcc(centre, s) for s in site_atoms),
                         label=int(pk.dca(centre, L) <= 4.0), n_sites=len(groups), n_cands=len(sites)))
-            if len(batch_recs) >= 100:
-                pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
-                part += 1; recs += batch_recs; batch_recs = []
+            # The attempted list is written with the rows it belongs to, never before them. Written per structure
+            # while rows buffer, a crash would leave structures marked done whose predictions were lost, and the
+            # resumed run would read them back as refusals -- scoring the method zero for our own interruption.
+            if len(batch_recs) >= 20 or len(pending_ids) >= 20:
+                if batch_recs:
+                    pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
+                    part += 1; recs += batch_recs; batch_recs = []
+                with open(attempted, "a") as fh:
+                    fh.write("".join(f"{i}\n" for i in pending_ids))
+                pending_ids = []
             bar.update(1, postfix=f"{len(recs) + len(batch_recs)} predictions from {done} structures")
     if batch_recs:
         pd.DataFrame(batch_recs).to_csv(chunk_dir / f"part_{shard_tag}{part:04d}.csv", index=False)
         recs += batch_recs
+    if pending_ids:
+        with open(attempted, "a") as fh:
+            fh.write("".join(f"{i}\n" for i in pending_ids))
 
     # The table is assembled from every chunk on disk, not from this process's own rows. With --shard each process
     # holds only its share, and whichever finished last would otherwise overwrite the file with half the benchmark.
