@@ -256,6 +256,35 @@ Keeping the two apart matters for the same reason the GrASP correction did: 14 s
 move DeepSurf's numbers by about 5 percentage points, in a comparison whose differences are already inside their
 confidence intervals.
 
+### The top-1 gap is a choice between our own first two candidates (2026-10-07)
+
+`scripts/eval/rank1_residual.py` splits the gap instead of quoting it. On the 174 not-train-similar COACH420
+structures, ours 0.707 against P2Rank's 0.753:
+
+* **The net gap is eight structures built from fifty-two disagreements.** We lose 30 and win 22; the two methods
+  agree on 122. P2Rank is not systematically better here, it is differently wrong, with a small tilt. Any claim
+  that one method ranks pockets better than the other has to survive that, and the paired interval
+  (-0.053 [-0.124, +0.017]) already says it does not.
+* **When we lose, the answer is almost always just below our pick.** Our first correct candidate is at rank 2 or 3
+  in 21 of the 30, at rank 2 alone in 14, and absent in 1. This is a ranking failure among a few plausible
+  pockets, not a detection failure -- consistent with the ceiling of 0.989 over our full list.
+* **But the pick we make instead is often not a near miss.** Its distance to the nearest true site is 4-8 A in 8
+  cases, 8-15 A in 11 and above 15 A in 11, median 11.1 A. A third of the time we confidently prefer a cavity
+  elsewhere in the protein, which is why re-centring a prediction never helped: the error is which cavity, not
+  where in it.
+* **A perfect choice among our own top two would score 0.839**, and among the top three 0.891, against P2Rank's
+  0.753. The decision that would close the gap is narrow enough to state as a binary one.
+* **The gap does not depend on how many sites the structure has** (21/124 lost at one site, 8/43 at two, 1/7 at
+  three or more), so it is not the multi-site behaviour that the top-N column measures.
+
+Two things follow. The first is that a shortlist re-ranker is worth one more attempt, and `--cascade-feats` makes
+the attempt the earlier failure pointed at rather than a repeat of it (see the negative result below). The second
+is that "which cavity is ligandable, given the others" is exactly the comparison the site decoder was built to
+make, since it scores site tokens against each other rather than scoring candidates independently -- so this
+diagnosis is a prediction the `no_site_decoder` ablation tests, not a new experiment to design.
+
+Numbers and the structure lists: `rank1_residual_coach420.json`.
+
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
 The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run
