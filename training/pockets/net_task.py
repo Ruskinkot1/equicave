@@ -227,8 +227,36 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
             p_ = MT.per_structure(rr, "score", label_col=col)
             res[name] = {k: float(p_[k].mean()) for k in ("top1", "top3", "topN", "topN2", "ceiling")}
         res["net_center_error_median"] = float(rr.groupby("pdb")["dcc"].min().median())
-    res["val_score"] = float(np.nanmean([res["occ_ap"], res["res_ap"]]))
+    res["val_score"] = select_score(res, cfg)
     return res
+
+
+# How much of the selection score each validation metric carries. Site top-1 is the task the project is judged on,
+# so it must be in here: a score built only from the per-node classification heads is blind to whether the model
+# can place a pocket at all. Measured on the first full GPU run (fold 0, seed 0): between epochs 20 and 24, as the
+# staged schedule switched the centre and ranking terms on, site top-1 went 0.040 -> 0.868 and the median centre
+# error 16.4 A -> 1.1 A, while occ_ap drifted 0.790 -> 0.790 and res_ap 0.711 -> 0.706. The old mean of those two
+# therefore *fell* across the only improvement that mattered, so checkpoint selection kept epoch 14 -- whose
+# metrics.json reports top1 0.022 and a ceiling of 0.118 -- and patience 10 stopped the run at 24 while top-1 was
+# still climbing. Every ablation arm would have been scored at the same blind checkpoint.
+SELECT_WEIGHTS = {"net_top1": 0.5, "occ_ap": 0.25, "res_ap": 0.25}
+
+
+def select_score(res: dict, cfg: dict | None = None) -> float:
+    """The scalar that checkpoint selection and early stopping use.
+
+    An arm that predicts no sites at all (`no_probes`) has no site metric rather than a bad one, so its weight is
+    dropped and the rest renormalised instead of scoring it zero -- the comparison between arms is made on the
+    ablation table, not by starving one arm's checkpoint selection.
+    """
+    w = dict(SELECT_WEIGHTS)
+    w.update(((cfg or {}).get("optim", {}) or {}).get("select_weights", {}) or {})
+    vals = {"net_top1": res.get("net_sites", {}).get("top1"), "occ_ap": res.get("occ_ap"), "res_ap": res.get("res_ap")}
+    use = {k: v for k, v in vals.items() if v is not None and not (isinstance(v, float) and math.isnan(v)) and w.get(k)}
+    if not use:
+        return float("nan")
+    tot = sum(w[k] for k in use)
+    return float(sum(w[k] * use[k] for k in use) / tot)
 
 
 def _match_dim(in_dims, mc, kw, cfg, reference: str, log=print, tol: float = 0.02) -> int:
@@ -334,6 +362,15 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         if ep < stage1:
             for k in st.get("stage1_zero", []):
                 lw[k] = 0.0
+        elif stage1 and ep == stage1:
+            # The objective changes here, so a score from before it is not a score to beat. Stage 1 trains with the
+            # centre, confidence and listwise terms at zero, which is why the first run to reach this point stopped
+            # on patience measured against a stage-1 best while site top-1 was still climbing steeply. Selection
+            # restarts from this epoch, and a stage-1 checkpoint is never the answer: it was chosen without the
+            # terms the model exists to optimise.
+            best, bad = -float("inf"), 0
+            log(f"stage 2 begins at epoch {ep + 1}: early stopping restarts, {cfg['optim']['patience']} epochs of "
+                f"patience from here")
         model.train(); t0 = time.time(); order = rng.permutation(len(files_tr)); agg = {}; run = 0.0
         # An epoch is one pass over every cached structure — hours at full scale, so it reports inside the epoch
         # rather than only in the one line at the end of it.
