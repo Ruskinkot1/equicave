@@ -65,6 +65,11 @@ model:
   # only invariants, so equivariance is unchanged, and it costs `layers * heads` parameters against the O(dim^2) a
   # key-query projection would. Their own ablation puts it at about +3.3 % DCC over dot-product on the same model.
   attn_kernel: dot           # dot | gaussian
+  # How a site's member probes collapse into one score. P2Rank sums the squares of its per-point ligandability
+  # and reports that PRANK tested the mean and rejected it; GrASP and VN-EGNN average; YuelPocket takes the peak.
+  # Three accurate methods, three rules, no published comparison -- in every one of them it is a hyperparameter
+  # rather than an ablation. The default is P2Rank's, being the rule the strongest ranker uses.
+  site_agg: sum_sq           # sum_sq | mean | max | sum
 loss:
   hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
   mask_frac: 0.15            # self-supervised masked-residue task

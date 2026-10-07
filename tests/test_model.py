@@ -598,3 +598,56 @@ def test_seg_mean_is_a_mean_per_destination():
     idx = torch.tensor([0, 0, 1])
     got = M.seg_mean(v, idx, 3)
     assert torch.allclose(got, torch.tensor([[2.0], [10.0], [0.0]]))
+
+
+# --- the site aggregator --------------------------------------------------------------------------------------
+# Three accurate methods use three different rules to collapse a site's members into one score -- P2Rank sums the
+# squares, GrASP and VN-EGNN average, YuelPocket takes the peak -- and nobody has compared them. In every one of
+# them it is a hyperparameter, never an ablation, so this is a missing comparison rather than a tuning knob.
+
+
+@pytest.mark.parametrize("agg", M.SiteDecoder.AGGREGATORS)
+def test_every_aggregator_keeps_the_model_equivariant(agg):
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, site_decoder=True,
+                        site_agg=agg).eval()
+    b = _batch(); R = _rot(); t = torch.tensor([3.0, -2.0, 1.0])
+    with torch.no_grad():
+        o1 = net(b); o2 = net(_apply(b, R, t))
+    assert torch.allclose(o1["occ_logit"], o2["occ_logit"], atol=1e-4), agg
+    if "site_center" in o1:
+        assert torch.allclose(o1["site_center"] @ R.T + t, o2["site_center"], atol=1e-3), agg
+
+
+def test_the_aggregators_are_parameter_matched():
+    n = {a: sum(p.numel() for p in M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4,
+                                                 site_decoder=True, site_agg=a).parameters())
+         for a in M.SiteDecoder.AGGREGATORS}
+    assert len(set(n.values())) == 1, n       # otherwise the arm measures capacity as well as the rule
+
+
+def test_the_aggregators_actually_differ():
+    torch.manual_seed(0)
+    dec = M.SiteDecoder(dim=16, heads=2, agg="sum_sq")
+    w = torch.tensor([[1.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]])
+    occ = torch.tensor([0.9, 0.1, 0.1, 0.9])
+    got = {}
+    for a in M.SiteDecoder.AGGREGATORS:
+        dec.agg = a
+        got[a] = dec.aggregate(w, occ).squeeze(-1).tolist()
+    assert len({tuple(round(x, 6) for x in v) for v in got.values()}) == len(got), got
+    # the rule that matters: one confident probe plus two weak ones should beat three lukewarm ones under
+    # sum-of-squares, which is the reason P2Rank uses it, while the mean cannot tell them apart.
+    dec.agg = "mean"
+    flat = dec.aggregate(torch.ones(2, 3), torch.tensor([0.4, 0.4, 0.4])).squeeze(-1)
+    peak = dec.aggregate(torch.ones(2, 3), torch.tensor([0.9, 0.15, 0.15])).squeeze(-1)
+    assert abs(float(flat[0]) - float(peak[0])) < 0.02, "the mean is blind to the shape of the distribution"
+    dec.agg = "sum_sq"
+    flat2 = dec.aggregate(torch.ones(2, 3), torch.tensor([0.4, 0.4, 0.4])).squeeze(-1)
+    peak2 = dec.aggregate(torch.ones(2, 3), torch.tensor([0.9, 0.15, 0.15])).squeeze(-1)
+    assert float(peak2[0]) > float(flat2[0]), "sum of squares must prefer the peaked site"
+
+
+def test_an_unknown_aggregator_is_refused():
+    with pytest.raises(AssertionError):
+        M.SiteDecoder(dim=16, heads=2, agg="median")

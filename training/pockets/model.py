@@ -253,7 +253,7 @@ class GeoTensorAttention(nn.Module):
         return xo.to(dt), None if Vo is None else Vo.to(dt), None if To is None else To.to(dt)
 
 
-N_SITE_SUMMARY = 6          # invariant per-site scalars, see SiteDecoder.summaries
+N_SITE_SUMMARY = 7          # invariant per-site scalars, see SiteDecoder.summaries
 
 
 class SiteDecoder(nn.Module):
@@ -280,10 +280,15 @@ class SiteDecoder(nn.Module):
     centres stay equivariant by construction, being convex combinations of positions.
     """
 
+    AGGREGATORS = ("sum_sq", "mean", "max", "sum")
+
     def __init__(self, dim: int, heads: int = 4, layers: int = 2, n_sites: int = 32, nms: float = 6.0,
-                 membership: float = 8.0, n_rbf: int = 16, cutoff: float = 30.0, dropout: float = 0.0):
+                 membership: float = 8.0, n_rbf: int = 16, cutoff: float = 30.0, dropout: float = 0.0,
+                 agg: str = "sum_sq"):
         super().__init__()
+        assert agg in SiteDecoder.AGGREGATORS, f"agg must be one of {SiteDecoder.AGGREGATORS}"
         self.dim, self.heads, self.n_sites, self.nms, self.membership = dim, heads, n_sites, nms, membership
+        self.agg = agg
         self.hd = dim // heads
         self.token = nn.Sequential(nn.Linear(2 * dim + N_SITE_SUMMARY, dim), nn.SiLU(), nn.Linear(dim, dim))
         self.rbf = RBF(n_rbf, cutoff)
@@ -311,6 +316,28 @@ class SiteDecoder(nn.Module):
                 break
         return torch.tensor(keep, dtype=torch.long, device=conf.device)
 
+    def aggregate(self, w: torch.Tensor, occ: torch.Tensor) -> torch.Tensor:
+        """Collapse a site's member probes into one occupancy score, by the rule `agg` names.
+
+        The three accurate methods in this field use three different rules and nobody has compared them. P2Rank
+        sums the *squares* of its per-point ligandability over a cluster and reports that PRANK tested the mean
+        and rejected it; GrASP and VN-EGNN both average; YuelPocket takes the peak. The choice is a hyperparameter
+        in every one of them, never an ablation, so this is the comparison the field is missing rather than a
+        tuning knob.
+
+        Sum-of-squares rewards a site that has several confident probes over one that has many lukewarm ones,
+        which is why it is the default here: it is the rule the strongest ranker uses. The membership weights
+        multiply the term rather than normalising it, except for `mean`, where normalising is the point.
+        """
+        o = occ[:, None]
+        if self.agg == "mean":
+            return w @ o / w.sum(1, keepdim=True).clamp(min=1e-6)
+        if self.agg == "max":
+            return (w * occ[None, :]).max(1, keepdim=True).values
+        if self.agg == "sum":
+            return torch.log1p(w @ o)
+        return torch.log1p(w @ (o ** 2))                      # sum_sq, P2Rank's rule and the default
+
     def summaries(self, w: torch.Tensor, occ: torch.Tensor, conf: torch.Tensor, center: torch.Tensor,
                   site_center: torch.Tensor, probe_pos: torch.Tensor) -> torch.Tensor:
         """[S, N_SITE_SUMMARY] invariant scalars per site: how much pocket there is and how sure of it the probes are.
@@ -321,6 +348,7 @@ class SiteDecoder(nn.Module):
         among its most useful columns, which no per-probe head can see.
         """
         mass = w.sum(1, keepdim=True)
+        agg_occ = self.aggregate(w, occ)
         mean_occ = w @ occ[:, None] / mass.clamp(min=1e-6)
         max_occ = torch.stack([occ[w[s] > 1e-3].max() if (w[s] > 1e-3).any() else occ.new_zeros(())
                                for s in range(len(w))])[:, None]
@@ -328,7 +356,7 @@ class SiteDecoder(nn.Module):
         spread = ((w @ (center ** 2) / mass.clamp(min=1e-6)) - (w @ center / mass.clamp(min=1e-6)) ** 2)
         spread = spread.clamp(min=0).sum(-1, keepdim=True).sqrt()
         centrality = (site_center - probe_pos.mean(0, keepdim=True)).norm(dim=-1, keepdim=True)
-        return torch.cat([torch.log1p(mass), mean_occ, max_occ, mean_conf, spread, centrality / 10.0], -1)
+        return torch.cat([torch.log1p(mass), agg_occ, mean_occ, max_occ, mean_conf, spread, centrality / 10.0], -1)
 
     def forward(self, xp: torch.Tensor, vnorm: torch.Tensor, center: torch.Tensor, probe_pos: torch.Tensor,
                 conf_logit: torch.Tensor, occ_logit: torch.Tensor) -> dict:
@@ -372,7 +400,8 @@ class EquiCaveNet(nn.Module):
                  recycles: int = 0, n_edge_scalar: int = 0, n_res_types: int = 21,
                  invariant_mode: str = "frames", site_decoder: bool = True, site_layers: int = 2,
                  n_site_tokens: int = 32, site_nms: float = 6.0, site_membership: float = 8.0,
-                 probe_update: str = "center", flow_step: float = 2.0, attn_kernel: str = "dot", **_ignored):
+                 probe_update: str = "center", flow_step: float = 2.0, attn_kernel: str = "dot",
+                 site_agg: str = "sum_sq", **_ignored):
         super().__init__()
         self.dim, self.equivariant = dim, equivariant
         self.recycles, self.n_edge_scalar = recycles, n_edge_scalar
@@ -409,7 +438,7 @@ class EquiCaveNet(nn.Module):
         self.off_inv = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 3))   # invariant model: plain regression (not equivariant)
         # The sites as entities that compete, which no per-probe head can represent. See SiteDecoder.
         self.site_decoder = SiteDecoder(dim, heads, site_layers, n_site_tokens, site_nms, site_membership,
-                                        dropout=dropout) if site_decoder else None
+                                        dropout=dropout, agg=site_agg) if site_decoder else None
         # How a probe moves between passes. "center" jumps it to its own predicted centre, which is one large
         # uncorrected step; "flow" walks it along the direction head's prediction in `flow_step`-angstrom steps, so
         # the only two mechanisms the ablation found to matter -- the probes and the dense direction signal -- drive
