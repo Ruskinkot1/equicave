@@ -206,7 +206,37 @@ VN-EGNN's own table and the fpocket+PRANK hybrid placing first of thirteen in LI
 Detection is again not where we lose: our ceiling is 0.988 against DeepPocket's 0.965 and P2Rank's 0.931. The same
 diagnosis as before, now confirmed against a learned method and not only against a geometric one.
 
-### GrASP as well: three learned methods, and none of them beats a 2018 random forest
+### All five methods, and the claim this section used to make is withdrawn (2026-10-07)
+
+DeepSurf finished last, and it changes the headline. On the 269 COACH420 structures every one of the five
+predicted, on the row not similar to our training manifest:
+
+| method | year | predictions | ceiling | top-1 | top-N | top-(N+2) |
+|---|---|---|---|---|---|---|
+| **DeepSurf** | 2021 | 2.0 | 0.826 | **0.801** | 0.814 | 0.826 |
+| P2Rank 2.5.1 | 2018 | 7.6 | 0.925 | 0.764 | **0.826** | 0.876 |
+| **ours** (ranker) | — | 30.0 | **0.994** | 0.708 | 0.783 | **0.888** |
+| DeepPocket | 2021 | 30.4 | 0.963 | 0.708 | 0.776 | **0.888** |
+| GrASP | 2024 | 2.0 | 0.764 | 0.708 | 0.739 | 0.764 |
+
+Paired against P2Rank: DeepSurf **+0.037 [-0.025, +0.101]** on top-1, every other method -0.056.
+
+**The claim that no learned method beats a 2018 random forest at rank one is withdrawn.** One does, on our
+protocol, although the interval reaches zero. What it costs is in the same row: 2.0 predictions per structure
+and a ceiling of 0.826, so DeepSurf locates the site in 83 % of structures and ranks it first when it does. Its
+top-(N+2) equals its ceiling, so more predictions cannot help it. Ours is 0.994, and at top-(N+2) we and
+DeepPocket lead at 0.888.
+
+Two caveats the table cannot be read without. The common set is 269 rather than the 279 of the four-method
+table, and the ten that left are the largest structures: eight exceed this machine's memory even run alone
+(11.5-11.8 GB against a 15 GB limit) and three hit DeepSurf's own 100000 surface-point cap, recorded above.
+Large structures are harder, so their absence flatters DeepSurf; within the table all five are scored on the
+same 269. And the literature puts DeepSurf at 0.658 DCA on COACH420 under the EquiPocket protocol against 0.801
+here -- the protocol differing, not the method, which is the whole reason those tables cannot be mixed.
+
+Files: `compare_coach420_vs_dl5.md` / `.json`.
+
+### The four-method table this replaced: GrASP, DeepPocket and P2Rank
 
 GrASP (Tiwary 2024) driven through its own parse, inference and mean-shift clustering. All four methods on the
 **170 structures not similar to our training manifest** (279 in common overall), same labels, ligand rule, receptor
