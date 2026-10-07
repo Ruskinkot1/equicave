@@ -57,6 +57,11 @@ def main():
     # overwrites the published comparison for that tag and nothing says so.
     ap.add_argument("--out-tag", dest="out_tag", default=None,
                     help="suffix of the written compare_<set><out-tag>.md/.json; defaults to --tag")
+    ap.add_argument("--criterion", default="DCA", choices=["DCA", "DCC4", "DCC10", "DCC12"],
+                    help="what counts as a hit. DCA is centre-to-nearest-ligand-atom at 4 A, the usual rule. The "
+                         "DCC variants are centre-to-ligand-centroid: LIGYSIS argues 4 A is too conservative for "
+                         "DCC and that 10-12 A gives performance comparable with DCA at 4 A, and the "
+                         "EquiPocket-descended tables report DCC, so this is where their numbers live.")
     ap.add_argument("--novel-only", dest="novel_only", action="store_true",
                     help="keep only the structures whose 30 %% cluster is absent from the pre-2017 ligand-bound "
                          "PDB, as homology_control.py records it. Every method in the table could have been "
@@ -105,6 +110,19 @@ def main():
     first = ours.drop_duplicates("pdb").set_index("pdb")
     cluster = first["cluster30"].to_dict()                 # one cluster and subset label per structure, ours
     similar = first["train_similar"].astype(bool).to_dict()
+    # Every table carries dcc_min, ours and the tools' alike, so the DCC labels are derived here rather than
+    # requiring each driver to have written them.
+    thresh = {"DCA": None, "DCC4": 4.0, "DCC10": 10.0, "DCC12": 12.0}[a.criterion]
+
+    def relabel(df):
+        if thresh is None:
+            return df
+        col = "dcc_min" if "dcc_min" in df else "dcc"
+        if col not in df:
+            sys.exit(f"{a.criterion} needs a dcc column and this table has none")
+        return df.assign(label=(df[col] <= thresh).astype(int))
+
+    ours = relabel(ours)
     scored = {}                                  # name -> (table, score column, higher is better)
     for col in a.ours:
         if col in ours:
@@ -117,7 +135,7 @@ def main():
         except FileNotFoundError:
             print(f"  candidates_{tool}_{a.set} not found; run scripts/baselines/run_external.py for this set")
             continue
-        df = mark(df, cluster, similar)
+        df = relabel(mark(df, cluster, similar))
         scored[tool] = (df.assign(_s=-df["tool_rank"]), "_s")        # the tool's own ranking
 
     if len(scored) < 2:
@@ -150,8 +168,10 @@ def main():
                                    for c in ("top1", "topN", "topN2")}
 
     lines = [f"# {a.set}: our predictions against external tools on the same structures", "",
-             f"{len(common)} structures predicted by every method listed. Success is DCA <= 4 A to a ligand of the "
-             f"set's own relevant-ligand list; N is the structure's own number of ligand sites. 95 % CI by 30 %-"
+             f"{len(common)} structures predicted by every method listed. Success is "
+             + (f"DCA <= 4 A to a ligand of the " if thresh is None else
+                f"DCC <= {thresh:g} A to a ligand centroid of the ")
+             + f"set's own relevant-ligand list; N is the structure's own number of ligand sites. 95 % CI by 30 %-"
              f"identity cluster bootstrap. `train-similar` means the structure shares a 30 %-identity cluster with "
              f"**our** training manifest; it is leakage for us and not for the external tools, whose own training "
              f"sets overlap this benchmark in ways this table does not measure. The comparable row for us is "
