@@ -115,7 +115,30 @@ def cv_scores(df: pd.DataFrame, feats, seed: int, objective: str = "lambdarank",
     return s
 
 
-def cascade_scores(df: pd.DataFrame, feats, first: np.ndarray, k: int, seed: int, rounds: int = 300) -> np.ndarray:
+def cascade_cv(sub: pd.DataFrame, sfeats, seed: int, rounds: int, nfeat: int) -> np.ndarray:
+    """Out-of-fold second-stage scores, optionally over only the `nfeat` columns the training folds find useful.
+
+    The first attempt at a cascade lost to the single-stage model and the reason given was arithmetic: restricting
+    the rows to the top k throws away about 97 % of them, and a few thousand rows cannot support a 236-column
+    model. That diagnosis names a remedy it did not try -- cut the columns, not only the rows -- so the selection
+    lives here. It is done inside each fold, on the training part alone: ranking columns by gain over the whole
+    table would let the held-out structures choose the model's inputs, which is leakage that flatters exactly the
+    metric under test.
+    """
+    s = np.full(len(sub), np.nan)
+    for k in sorted(sub["fold"].unique()):
+        tr = sub["fold"] != k
+        use = list(sfeats)
+        if nfeat and nfeat < len(use):
+            m = fit(sub[tr], use, seed, rounds, "lambdarank")
+            gain = pd.Series(m.feature_importance("gain"), index=use).sort_values(ascending=False)
+            use = gain.index[:nfeat].tolist()
+        s[~tr.to_numpy()] = fit(sub[tr], use, seed, rounds, "lambdarank").predict(sub.loc[~tr, use])
+    return s
+
+
+def cascade_scores(df: pd.DataFrame, feats, first: np.ndarray, k: int, seed: int, rounds: int = 300,
+                   nfeat: int = 0) -> np.ndarray:
     """A second stage that only ever sees the top `k` candidates of the first stage, and reorders those.
 
     Measured on the COACH420 structures that are not similar to our training set: when the first-ranked candidate is
@@ -141,7 +164,7 @@ def cascade_scores(df: pd.DataFrame, feats, first: np.ndarray, k: int, seed: int
     d["_first_margin"] = d["_first"] - best
     sub = d[top].reset_index(drop=True)
     sfeats = list(feats) + ["_first", "_first_rank", "_first_margin"]
-    s2 = cv_scores(sub, sfeats, seed, "lambdarank", rounds=rounds)
+    s2 = cascade_cv(sub, sfeats, seed, rounds, nfeat)
     # the reordered candidates keep their places at the head of the list; everything below keeps the first ordering
     out = np.empty(len(d))
     lo, hi = np.nanmin(s2), np.nanmax(s2)
@@ -249,6 +272,10 @@ def main():
                     "table of the same manifest on (pdb, center)")
     ap.add_argument("--cascade", default="", help="comma-separated k: second-stage re-rankers over the top k "
                     "candidates of the first stage, e.g. 3,5")
+    ap.add_argument("--cascade-feats", dest="cascade_feats", default="0",
+                    help="comma-separated column budgets for the second stage, chosen by gain inside each training "
+                         "fold; 0 means every column. The first cascade failed on a row-to-column ratio, so the "
+                         "budget is the variable that failure points at.")
     ap.add_argument("--objectives", action="store_true", help="also fit binary and regression objectives and rank-average")
     ap.add_argument("--set-ranker", action="store_true", help="also fit the permutation-equivariant set transformer")
     ap.add_argument("--set-dim", type=int, default=96); ap.add_argument("--set-layers", type=int, default=2)
@@ -358,9 +385,12 @@ def main():
 
     extra_scores = {}
     for k in [int(x) for x in a.cascade.split(",") if x.strip()]:
-        sc = np.mean([cascade_scores(df, feats, ens, k, sd) for sd in range(max(1, a.seeds // 2))], axis=0)
-        extra_scores[f"cascade{k}"] = sc
-        per_method[f"cascade re-ranker over the top {k}"] = [evaluate(df, sc)]
+        for nf in [int(x) for x in a.cascade_feats.split(",") if x.strip()]:
+            sc = np.mean([cascade_scores(df, feats, ens, k, sd, nfeat=nf) for sd in range(max(1, a.seeds // 2))],
+                         axis=0)
+            budget = "all columns" if not nf else f"{nf} columns"
+            extra_scores[f"cascade{k}" + (f"_f{nf}" if nf else "")] = sc
+            per_method[f"cascade re-ranker over the top {k}, {budget}"] = [evaluate(df, sc)]
     if a.objectives:
         for obj in ("binary", "regression"):
             sc = np.mean([cv_scores(df, feats, sd, obj) for sd in range(max(1, a.seeds // 2))], axis=0)
