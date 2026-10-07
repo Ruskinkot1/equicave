@@ -155,3 +155,54 @@ def dca(center, lig_xyz: np.ndarray) -> float:
 def dcc(center, lig_xyz: np.ndarray) -> float:
     """Distance from a predicted centre to the ligand centroid."""
     return float(np.linalg.norm(np.asarray(lig_xyz).mean(0) - np.asarray(center)))
+
+
+def _voxels(points: np.ndarray, step: float = GRID) -> set:
+    """A point cloud as a set of integer lattice cells, so two clouds can be intersected exactly."""
+    if len(points) == 0:
+        return set()
+    return set(map(tuple, np.rint(np.asarray(points, float) / step).astype(np.int64)))
+
+
+def site_voxels(lig_xyz: np.ndarray, free: np.ndarray, radius: float = 4.0, step: float = GRID) -> np.ndarray:
+    """The true pocket's volume: the free lattice points within `radius` of a ligand heavy atom.
+
+    DVO needs a volume for the answer, and which volume is a protocol choice rather than a given. scPDB ships
+    cavity files and the papers that report DVO use those; we do not depend on scPDB, so the volume is defined
+    from the ligand and our own lattice instead -- the free points the ligand actually occupies or touches. The
+    radius is stated rather than tuned, and both sides of the ratio live on the same lattice, which is what makes
+    the intersection exact instead of a nearest-neighbour approximation.
+    """
+    lig, free = np.asarray(lig_xyz, float), np.asarray(free, float)
+    if len(free) == 0 or len(lig) == 0:
+        return np.empty((0, 3))
+    d = cKDTree(lig).query(free, k=1, distance_upper_bound=radius)[0]
+    return free[np.isfinite(d)]
+
+
+def dvo(pred_points: np.ndarray, true_points: np.ndarray, step: float = GRID) -> float:
+    """Discretized volume overlap: the Jaccard index of two pocket volumes on the shared lattice.
+
+    DCC and DCA say whether the prediction is in the right place; this says whether it is the right shape and
+    size. A prediction can sit a single angstrom from the ligand centroid and still cover a tenth of the pocket,
+    or engulf half the protein -- both score perfectly on distance and badly here. Returns 0.0 when either volume
+    is empty, since an empty prediction overlaps nothing.
+    """
+    a, b = _voxels(pred_points, step), _voxels(true_points, step)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def pli(pred_points: np.ndarray, lig_xyz: np.ndarray, step: float = GRID) -> float:
+    """Proportion of ligand inside: the fraction of ligand heavy atoms falling in the predicted volume.
+
+    The asymmetric half of DVO. A pocket that covers the whole ligand but is twice too large scores 1.0 here and
+    poorly on DVO; reporting both separates "did it miss part of the ligand" from "is it the wrong size".
+    """
+    lig = np.asarray(lig_xyz, float)
+    if len(lig) == 0 or len(pred_points) == 0:
+        return 0.0
+    cells = _voxels(pred_points, step)
+    hit = [tuple(c) in cells for c in np.rint(lig / step).astype(np.int64)]
+    return float(np.mean(hit))
