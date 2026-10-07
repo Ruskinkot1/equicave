@@ -57,11 +57,27 @@ def main():
     # overwrites the published comparison for that tag and nothing says so.
     ap.add_argument("--out-tag", dest="out_tag", default=None,
                     help="suffix of the written compare_<set><out-tag>.md/.json; defaults to --tag")
+    ap.add_argument("--novel-only", dest="novel_only", action="store_true",
+                    help="keep only the structures whose 30 %% cluster is absent from the pre-2017 ligand-bound "
+                         "PDB, as homology_control.py records it. Every method in the table could have been "
+                         "trained on anything in that corpus, so this is the subset on which all of them are "
+                         "equally out of distribution -- hard novelty, not merely novel to our own manifest.")
     a = ap.parse_args()
     if a.out_tag is None:
         a.out_tag = a.tag
 
     ours = pd.read_csv(DS / f"eval_candidates_{a.set}{a.tag}.csv")
+    if a.novel_only:
+        corpus = REPO / "data/processed/homology_corpus_clusters.json"
+        if not corpus.exists():
+            sys.exit(f"{corpus} is missing: run scripts/eval/homology_control.py first")
+        seen = set(json.loads(corpus.read_text())["clusters"])
+        before = ours["pdb"].nunique()
+        ours = ours[~ours["cluster30"].astype(str).isin(seen)]
+        if ours.empty:
+            sys.exit("no structure of this set is novel against the corpus")
+        print(f"hard-novelty subset: {ours['pdb'].nunique()} of {before} structures, "
+              f"{ours['cluster30'].nunique()} clusters")
     train_cl = train_clusters()
     if "cluster30" not in ours:
         ours["cluster30"] = ours["pdb"]

@@ -331,6 +331,55 @@ table. P2Rank scores DCA 0.628 on COACH420 under their protocol (EquiPocket's be
 clustering over high-scoring residues) against 0.759 under ours, so their GDEGAN 0.707 must not be set beside our
 0.706. What transfers is the relative ablation, not the row.
 
+### Homology control, and the confound that nearly made it a false result (2026-10-07)
+
+Nobody has published the overlap between the field's training corpus and its benchmarks as a percentage of
+identity clusters. The controls that exist are differences of PDB-code sets, which catch only literal re-use, and
+P2Rank's disjointness guarantee is against CHEN11/JOINED rather than scPDB, so the scPDB-trained lineage inherits
+none. `scripts/eval/homology_control.py` measures it against a deliberately conservative corpus: every X-ray
+protein-ligand complex deposited on or before the scPDB 2017 release, 87955 entries in 17980 clusters. Any method
+trained on scPDB lies inside it, so removing homologues over-removes and never under-removes.
+
+| benchmark | structures | clusters | homologous to the corpus | homologous to our manifest | novel to all | novel clusters |
+|---|---|---|---|---|---|---|
+| COACH420 | 288 | 253 | 173 (60 %) | 105 (36 %) | 94 | 91 |
+| HOLO4K | 3337 | 916 | 2318 (69 %) | 1773 (53 %) | 659 | 332 |
+| LIGYSIS | 1637 | 1235 | 908 (55 %) | 437 (27 %) | 609 | 536 |
+| CryptoBench | 178 | 171 | 99 (56 %) | 58 (33 %) | 63 | 60 |
+
+The threshold was fixed before the numbers were seen: a subset carrying fewer than about 100 independent clusters
+is not published, because a cluster bootstrap on it gives intervals wider than any effect. HOLO4K (332) and
+LIGYSIS (536) pass; COACH420 (91) and CryptoBench (60) do not, and are not used.
+
+What "novel" means here is stronger than "absent from one method's training set": the fold family had no
+ligand-bound representative anywhere in the PDB before 2017. That is the price of not depending on an author
+having published a split.
+
+**The aggregate result, and why it is not the result.** On HOLO4K the paired difference against P2Rank moves from
+-0.033 [-0.063, -0.004] on the full not-train-similar row to +0.003 [-0.040, +0.048] on the novel subset: a
+significant top-1 deficit becoming a tie. Top-(N+2) does the same, -0.023 [-0.043, -0.004] to
+-0.002 [-0.028, +0.024].
+
+Stratifying by the structure's own site count shows most of that is composition, not homology. The novel subset
+carries 2.17 sites per structure against 1.86 for the removed one, 40 % single-site against 56 % -- and
+multi-site structures are where we are relatively stronger, so removing homologues enriched the subset in our
+favour for a reason that has nothing to do with leakage:
+
+| sites | full HOLO4K | novel subset |
+|---|---|---|
+| 1 | -0.072 (n=738) | -0.069 (n=248) |
+| 2 | -0.058 (n=479) | -0.043 (n=233) |
+| >=3 | -0.057 (n=282) | **+0.036** (n=137) |
+
+At one site, where top-N is top-1 and composition cannot move anything, the deficit does not shift at all. The
+within-stratum effect is real only at three or more sites, where it flips sign. So the honest statement is narrow:
+on targets with three or more sites and no ligand-bound homologue in the pre-2017 PDB we are ahead of P2Rank,
+and on single-site targets homology control changes nothing. The aggregate tie is an artefact of what the filter
+removed, and quoting it without the stratification would have been a false result built from true numbers.
+
+This is correlational either way. No method was retrained, so none of it establishes that the remaining gap is
+leakage; it establishes what the gap is on targets the field has not seen before.
+
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
 The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run

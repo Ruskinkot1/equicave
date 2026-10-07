@@ -1,0 +1,43 @@
+{
+ "cutoff": "2017-12-31",
+ "max_res": 3.0,
+ "corpus_clusters": 17980,
+ "rows": [
+  {
+   "set": "coach420",
+   "structures": 288,
+   "clusters": 253,
+   "similar_to_theirs": 173,
+   "similar_to_ours": 105,
+   "novel_to_all": 94,
+   "novel_clusters": 91
+  },
+  {
+   "set": "holo4k",
+   "structures": 3337,
+   "clusters": 916,
+   "similar_to_theirs": 2318,
+   "similar_to_ours": 1773,
+   "novel_to_all": 659,
+   "novel_clusters": 332
+  },
+  {
+   "set": "ligysis",
+   "structures": 1637,
+   "clusters": 1235,
+   "similar_to_theirs": 908,
+   "similar_to_ours": 437,
+   "novel_to_all": 609,
+   "novel_clusters": 536
+  },
+  {
+   "set": "cryptobench_test",
+   "structures": 178,
+   "clusters": 171,
+   "similar_to_theirs": 99,
+   "similar_to_ours": 58,
+   "novel_to_all": 63,
+   "novel_clusters": 60
+  }
+ ]
+}
