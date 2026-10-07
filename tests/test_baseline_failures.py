@@ -10,7 +10,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts/baselines"))
-import run_deepsurf as rd  # noqa: E402
+import failures as rd  # noqa: E402
 
 
 def test_their_size_cap_is_theirs():
@@ -28,7 +28,7 @@ def test_excluded_reads_the_id_not_the_reason(tmp_path):
     f = tmp_path / "failed.txt"
     f.write_text("1E5Q\ttheirs\tTypeError: cannot unpack non-iterable NoneType object\n"
                  "1F8G\tours\ttheir process died before reporting\n")
-    assert rd.excluded(f) == {"1E5Q", "1F8G"}
+    assert rd.read(f) == {"1E5Q", "1F8G"}
 
 
 def test_retry_ours_lets_our_failures_back_in_only(tmp_path):
@@ -36,7 +36,7 @@ def test_retry_ours_lets_our_failures_back_in_only(tmp_path):
     f.write_text("1E5Q\ttheirs\tTypeError: cannot unpack non-iterable NoneType object\n"
                  "1F8G\tours\ttheir process died before reporting\n"
                  "1Q51\ttheirs\tTypeError: cannot unpack non-iterable NoneType object\n")
-    assert rd.excluded(f, retry_ours=True) == {"1E5Q", "1Q51"}
+    assert rd.read(f, retry_ours=True) == {"1E5Q", "1Q51"}
 
 
 def test_a_line_with_no_reason_stays_excluded(tmp_path):
@@ -44,8 +44,25 @@ def test_a_line_with_no_reason_stays_excluded(tmp_path):
     # so the unknown case keeps the structure out rather than guessing it was ours.
     f = tmp_path / "failed.txt"
     f.write_text("2WVA\n\n1F8G\tours\tkilled\n")
-    assert rd.excluded(f, retry_ours=True) == {"2WVA"}
+    assert rd.read(f, retry_ours=True) == {"2WVA"}
 
 
 def test_missing_file_excludes_nothing(tmp_path):
-    assert rd.excluded(tmp_path / "nope.txt") == set()
+    assert rd.read(tmp_path / "nope.txt") == set()
+
+
+def test_record_writes_a_line_read_back_as_one_id(tmp_path):
+    f = tmp_path / "failed.txt"
+    rd.record(f, "1F8G", rd.KILLED)
+    rd.record(f, "2WVA", "TypeError: cannot unpack non-iterable NoneType object")
+    assert rd.read(f) == {"1F8G", "2WVA"}
+    assert rd.read(f, retry_ours=True) == {"2WVA"}
+
+
+def test_every_reader_parses_the_same_format(tmp_path):
+    # The three consumers each read failed.txt for a different decision -- what to skip on resume, what counts as
+    # a refusal, what to re-attempt -- and a reader that took the whole tab-separated line as an id would charge
+    # the method for our failures again. They must therefore all go through this module.
+    import add_missing_as_misses, repair_attempted, run_deeppocket, run_deepsurf
+    for m in (add_missing_as_misses, repair_attempted, run_deeppocket, run_deepsurf):
+        assert m.failures is rd, m.__name__

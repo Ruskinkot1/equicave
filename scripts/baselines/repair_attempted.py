@@ -15,6 +15,9 @@ import argparse, pathlib, sys
 
 import pandas as pd
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import failures  # noqa: E402
+
 DS = pathlib.Path(__file__).resolve().parents[2] / "data/processed"
 
 
@@ -35,7 +38,7 @@ def main():
         except Exception:                                # noqa: BLE001 -- a chunk being written right now
             print(f"  unreadable chunk {f.name}; ignored")
     failed = d / "failed.txt"
-    have |= {l.strip() for l in failed.read_text().splitlines() if l.strip()} if failed.exists() else set()
+    have |= failures.read(failed)
     keep = [i for i in ids if i in have]
     lost = [i for i in ids if i not in have]
     print(f"{a.tool}: {len(ids)} attempted, {len(keep)} have rows or are recorded failures, "

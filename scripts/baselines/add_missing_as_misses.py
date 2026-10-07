@@ -21,6 +21,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 from equicave import tables  # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import failures  # noqa: E402
+
 DS = REPO / "data/processed"
 
 
@@ -39,7 +42,7 @@ def main():
     # A structure our own pipeline failed on is not the method refusing to predict, and scoring it as a miss would
     # charge the method for our environment. The drivers record those separately.
     failed_file = attempted_file.parent / "failed.txt"
-    failed = {l.strip() for l in failed_file.read_text().splitlines() if l.strip()} if failed_file.exists() else set()
+    failed = failures.read(failed_file)
     if failed:
         print(f"  excluding {len(failed)} structures our pipeline failed on, which are not refusals")
     attempted -= failed

@@ -35,41 +35,10 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/eval"))
 from equicave import labels as LB, pockets as pk, progress, structure, tables  # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import failures  # noqa: E402
+
 BRIDGE = pathlib.Path(__file__).resolve().parent / "deepsurf_bridge.py"
-
-KILLED = "their process died before reporting"
-# `readSurfPoints` in their `utils.py` returns None above 100000 DMS surface points and `simplify_dms` unpacks it
-# unguarded, so their cap on receptor size reaches us as a TypeError. That is a limit of the published method, and
-# the structure stays excluded however often it is tried. Everything else -- above all a process the kernel killed
-# for memory -- is this machine's, and is worth one serial retry.
-THEIR_LIMIT = ("cannot unpack non-iterable NoneType",)
-
-
-def ours(reason: str) -> bool:
-    """True when the failure is this machine's rather than a limit written into their code."""
-    return not any(s in reason for s in THEIR_LIMIT)
-
-
-def excluded(failed_file: pathlib.Path, retry_ours: bool = False) -> set:
-    """The ids in `failed_file` to leave out of this run.
-
-    A structure already excluded is not retried by default: a process start-up costs more than the structure. With
-    `retry_ours` the ones that failed for a reason of ours are let back in, which is what a serial pass after a
-    sharded run wants. A line carrying no reason predates the reason being recorded and is kept excluded, that
-    being the cheaper direction to be wrong in.
-    """
-    if not failed_file.exists():
-        return set()
-    out = set()
-    for line in failed_file.read_text().splitlines():
-        f = line.split("\t")
-        if not f[0].strip():
-            continue
-        if retry_ours and len(f) > 1 and f[1] == "ours":
-            continue
-        out.add(f[0].strip())
-    return out
-
 
 def run_bridge(a, tasks, work: pathlib.Path, errlog: pathlib.Path):
     """Yield `(pdb_id, sites or None, reason)` from one bridge process, streamed as the structures finish.
@@ -115,7 +84,7 @@ def predict_batch(a, tasks, work: pathlib.Path, errlog: pathlib.Path):
             # The process died before reporting anything at all: drop the first structure, which is where it died,
             # and carry on with the rest rather than looping on it for ever.
             print(f"  {left[0][0]}: their process died before reporting; skipped", flush=True)
-            yield left[0][0], None, KILLED
+            yield left[0][0], None, failures.KILLED
             left = left[1:]
         elif left:
             print(f"  their process stopped with {len(left)} structures left; restarting it", flush=True)
@@ -167,7 +136,7 @@ def main():
         # structure too large for the memory this machine has), and each retry costs a process start-up to fail
         # again. failed.txt is written as it happens while the attempted list is flushed in batches, so after an
         # interruption it is the more complete record of the two.
-        seen |= excluded(chunk_dir / "failed.txt", a.retry_ours)
+        seen |= failures.read(chunk_dir / "failed.txt", a.retry_ours)
         if seen:
             print(f"  resuming: {len(seen)} structures already done, {len(recs)} predictions kept")
     rows = [r for r in rows if r["pdb"] not in seen]
@@ -198,8 +167,7 @@ def main():
                 # it can be excluded rather than scored as a refusal -- charging a method for our memory would be a
                 # thumb on the scale against it. The reason is kept with the id because it decides whether a retry
                 # is worth a process start-up: ours is, their own size cap is not.
-                with open(chunk_dir / "failed.txt", "a") as fh:
-                    fh.write(f"{pdb_id}\t{'ours' if ours(reason) else 'theirs'}\t{reason}\n")
+                failures.record(chunk_dir / "failed.txt", pdb_id, reason)
                 bar.update(1, postfix=f"{len(recs) + len(batch_recs)} predictions from {done} structures")
                 continue
             codes = set(filter(None, r.get("ligand_codes", "").replace(";", ",").split(","))) or None

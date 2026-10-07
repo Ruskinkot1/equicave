@@ -34,6 +34,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/eval"))
 from equicave import labels as LB, pockets as pk, progress, structure, tables  # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import failures  # noqa: E402
+
 
 def load_their_modules(repo: pathlib.Path):
     """Import DeepPocket's own modules from its checkout. They import each other by bare name."""
@@ -150,9 +153,7 @@ def main():
         # structure too large for the memory this machine has), and each retry costs a process start-up to fail
         # again. failed.txt is written as it happens while the attempted list is flushed in batches, so after an
         # interruption it is the more complete record of the two.
-        failed_file = chunk_dir / "failed.txt"
-        if failed_file.exists():
-            seen |= {l.strip() for l in failed_file.read_text().splitlines() if l.strip()}
+        seen |= failures.read(chunk_dir / "failed.txt")
         if seen:
             print(f"  resuming: {len(seen)} structures already done, {len(recs)} predictions kept")
     rows = [r for r in rows if r["pdb"] not in seen]
