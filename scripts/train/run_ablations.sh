@@ -20,11 +20,30 @@
 #   SEEDS=1 GROUP=decoder bash scripts/train/run_ablations.sh # the decoder arms only, one seed
 #   ARMS="full no_site_decoder" bash scripts/train/run_ablations.sh
 #   DRY_RUN=1 bash scripts/train/run_ablations.sh             # print the plan and the cost, run nothing
+#   RESUME=1 bash scripts/train/run_ablations.sh              # continue the most recent dated grid
 #
-# Env: OUT FOLD SEEDS ARMS GROUP DEVICE CFG CACHE_ROOT HOURS_PER_RUN DRY_RUN
+# Output goes to runs/training/ablations/<YYYYmmdd-HHMMSS>/ unless OUT says otherwise, so two launches never
+# overwrite each other and every table can be dated. RESUME=1 picks the newest such directory instead.
+#
+# Env: OUT RUNS_ROOT RESUME FOLD SEEDS ARMS GROUP DEVICE CFG CACHE_ROOT HOURS_PER_RUN DRY_RUN
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-OUT=${OUT:-runs/training/ablations}
+# Each launch gets its own dated directory, so two grids never write into one tree and a result can always be
+# traced back to when it was produced. That costs the resume this script exists for, though: the skip rule is
+# "this arm already has a metrics.json", and a fresh directory has none. So RESUME=1 continues the most recent
+# grid instead of starting one, and the path is printed either way so it can be passed back as OUT.
+RUNS_ROOT=${RUNS_ROOT:-runs/training/ablations}
+if [ -n "${OUT:-}" ]; then
+  :
+elif [ "${RESUME:-0}" = "1" ]; then
+  OUT=$(ls -1d "$RUNS_ROOT"/*/ 2>/dev/null | sort | tail -1)
+  OUT=${OUT%/}
+  [ -n "$OUT" ] || { echo "RESUME=1 but no grid under $RUNS_ROOT yet"; exit 1; }
+  echo "resuming the most recent grid: $OUT"
+else
+  OUT="$RUNS_ROOT/$(date +%Y%m%d-%H%M%S)"
+fi
+echo "output directory: $OUT"
 FOLD=${FOLD:-0}
 SEEDS=${SEEDS:-3}
 GROUP=${GROUP:-all}
@@ -103,6 +122,10 @@ echo
 echo "$done_n trained, $skip_n already present, $fail_n failed"
 # The table lands beside the runs it was built from, not in docs/results: a two-arm smoke would otherwise
 # overwrite a published grid with its own "not run" rows, and nothing would say so. PUBLISH=1 asks for that copy.
+echo
+echo "runs for this grid: $OUT"
+echo "  continue it after an interruption with:  RESUME=1 bash scripts/train/run_ablations.sh"
+echo "  or explicitly:                           OUT=$OUT bash scripts/train/run_ablations.sh"
 TABLE="$OUT/ablations.md"
 $PY scripts/train/collect_ablations.py --runs "$OUT" --out "$TABLE" || \
   { echo "collect_ablations.py failed; the runs are in $OUT"; exit 0; }

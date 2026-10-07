@@ -1,7 +1,9 @@
 """Config loading: YAML defaults + `--set key=value` overrides; seeds; device selection; run directories."""
 from __future__ import annotations
 
+import datetime
 import json
+import subprocess
 import os
 import random
 from pathlib import Path
@@ -49,4 +51,18 @@ def run_dir(base: str | Path, name: str) -> Path:
 
 
 def write_model_card(d: Path, card: dict) -> None:
+    """The card, stamped with when it was written and which commit produced it.
+
+    A metrics.json with no date is only identifiable by the directory it sits in, which is exactly what gets lost
+    when runs are copied off a machine or zipped up. Both fields go in the file itself.
+    """
+    card = dict(card, written_at=datetime.datetime.now().isoformat(timespec="seconds"), commit=git_commit())
     (d / "model_card.json").write_text(json.dumps(card, indent=1, default=str))
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                              timeout=5).stdout.strip() or "unknown"
+    except Exception:            # noqa: BLE001 -- a run outside a checkout still has to write its card
+        return "unknown"
