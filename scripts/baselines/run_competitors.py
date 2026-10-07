@@ -41,10 +41,10 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts/train")); sys.path.insert(0, str(REPO / "scripts/baselines"))
 from equicave import pockets as pk, structure, tables  # noqa: E402
 from build_native import n_sites  # noqa: E402
-from run_external import protein_only, run_fpocket, run_p2rank_batch  # noqa: E402
+from run_external import protein_only, run_fpocket, run_fpocket_prank_batch, run_p2rank_batch  # noqa: E402
 
 WRAPPER_TOOLS = {"deeppocket": "DEEPPOCKET", "deepsurf": "DEEPSURF", "grasp": "GRASP", "vnegnn": "VNEGNN"}
-ALL = ["fpocket", "p2rank", *WRAPPER_TOOLS]
+ALL = ["fpocket", "p2rank", "fpocket_prank", *WRAPPER_TOOLS]
 
 
 def run_wrapper(exe: str, prot: pathlib.Path, work: pathlib.Path, timeout: int = 900) -> list[dict]:
@@ -80,13 +80,29 @@ def label(rows, pdb, raw, codes, meta):
     return out
 
 
-def one_tool(tool: str, items, work: pathlib.Path, jobs: int) -> pd.DataFrame:
-    exe = os.environ.get("FPOCKET" if tool == "fpocket" else "PRANK" if tool == "p2rank" else WRAPPER_TOOLS[tool])
-    if not exe:
-        exe = shutil.which("fpocket" if tool == "fpocket" else "prank" if tool == "p2rank" else tool)
-    if not exe:
-        var = "FPOCKET" if tool == "fpocket" else "PRANK" if tool == "p2rank" else WRAPPER_TOOLS[tool]
+def _exe(tool: str):
+    """The executable for a tool, from its environment variable or the path, or None with a message."""
+    var = {"fpocket": "FPOCKET", "p2rank": "PRANK"}.get(tool) or WRAPPER_TOOLS.get(tool, tool.upper())
+    found = os.environ.get(var) or shutil.which({"p2rank": "prank"}.get(tool, tool))
+    if not found:
         print(f"  {tool}: not available (set {var}); skipped")
+    return found
+
+
+def one_tool(tool: str, items, work: pathlib.Path, jobs: int) -> pd.DataFrame:
+    if tool == "fpocket_prank":
+        # The cascade needs both binaries; it is one method, so a missing half is a missing method.
+        fp, pr = _exe("fpocket"), _exe("p2rank")
+        if not (fp and pr):
+            return pd.DataFrame()
+        res = run_fpocket_prank_batch(fp, pr, [p for _, _, p in items], work, jobs)
+        rows = []
+        for r, raw, prot in items:
+            rows += label(res.get(r["pdb"], []), r["pdb"], raw, {l[0] for l in json.loads(r["ligands"])},
+                          dict(cluster30=r["cluster30"], fold=int(r["fold"])))
+        return pd.DataFrame(rows)
+    exe = _exe(tool)
+    if not exe:
         return pd.DataFrame()
     rows = []
     if tool == "p2rank":

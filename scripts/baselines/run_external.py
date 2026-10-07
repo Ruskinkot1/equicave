@@ -4,7 +4,7 @@
 Labels and n_sites follow scripts/train/build_native.py exactly (same ligands, same DCA <= 4 A rule), so numbers are
 comparable. External tools see the protein-only PDB (ATOM records, all chains), as the native detector does.
 """
-import argparse, csv, json, os, pathlib, shutil, subprocess, sys, tempfile
+import argparse, csv, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -40,6 +40,72 @@ def run_fpocket(exe: str, prot: pathlib.Path, work: pathlib.Path) -> list[dict]:
         if len(xyz):
             out.append(dict(center=xyz.mean(0), tool_score=float(sc.get("Score", "nan")), tool_rank=i, tool_extra=len(xyz)))
     return out
+
+
+def run_fpocket_prank_batch(fpocket: str, prank: str, prots: list[pathlib.Path], work: pathlib.Path,
+                            threads: int) -> dict[str, list[dict]]:
+    """fpocket's cavities, reordered by PRANK. The strongest method in the one independent benchmark of this field.
+
+    Utges & Barton's LIGYSIS evaluation (J. Cheminform. 16:126, 2024) is the first third-party benchmark of
+    binding-site prediction since 2012, and both of its top two methods are fpocket plus a re-ranker: fpocket+PRANK
+    at 60.4 % top-(N+2) recall and DeepPocket's rescoring mode at 58.1 %, against P2Rank's own 51.9 % and GrASP's
+    49.9 %. The cascade is therefore not an also-ran to include for completeness -- it is the number to beat, and
+    it is missing from every method paper's comparison table.
+
+    It also sharpens our own negative result. Our cascade re-ranked our own candidate list, whose ceiling is about
+    0.99; PRANK re-ranks fpocket's, which covers 80.8 % of COACH420. All three fpocket cascades plateau near the
+    same recall on LIGYSIS and the authors read that as the base candidates, not the scoring, being the limit.
+
+    PRANK consumes fpocket's own output directory, so fpocket runs first and its `_out` directory is handed over.
+    """
+    out_dirs = {}
+    for prot in prots:
+        local = work / prot.name
+        if not local.exists():
+            shutil.copy(prot, local)
+        try:
+            subprocess.run([fpocket, "-f", str(local)], cwd=work, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            continue
+        od = work / f"{local.stem}_out"
+        if (od / f"{local.stem}_out.pdb").exists():
+            out_dirs[prot.stem] = (od / f"{local.stem}_out.pdb", local)
+    if not out_dirs:
+        return {}
+    # `prank rescore` takes two columns, prediction then protein, and the protein must be the one the prediction
+    # was computed from -- the same file fpocket was handed, not the original download.
+    ds = work / "rescore.ds"
+    ds.write_text("PARAM.PREDICTION_METHOD=fpocket\n\nHEADER: prediction protein\n\n"
+                  + "".join(f"{pred.resolve()}  {prot.resolve()}\n" for pred, prot in out_dirs.values()))
+    r = subprocess.run([prank, "rescore", str(ds), "-o", str(work / "rescored"), "-threads", str(threads)],
+                       capture_output=True, text=True, env=ENV)
+    if r.returncode:
+        sys.exit("PRANK rescore failed:\n" + (r.stderr or r.stdout)[-2000:])
+    # The rescored file carries the new ranking but no coordinates: its rows are fpocket pocket names. The centres
+    # therefore come from fpocket's own vertex files, and PRANK supplies only the order and the score -- which is
+    # exactly what the cascade is: fpocket's cavities, someone else's ranking.
+    res = {}
+    for pdb_id, (src, prot) in out_dirs.items():
+        centres = {}
+        pdir = src.parent / "pockets"
+        for vert in sorted(pdir.glob("pocket*_vert.pqr")) if pdir.is_dir() else []:
+            m = re.match(r"pocket(\d+)_vert", vert.stem)
+            xyz = np.array([[float(l[30:38]), float(l[38:46]), float(l[46:54])]
+                            for l in vert.read_text().splitlines() if l.startswith(("ATOM", "HETATM"))])
+            if m and len(xyz):
+                centres[int(m.group(1))] = (xyz.mean(0), len(xyz))
+        f = work / "rescored" / f"{prot.name}_rescored.csv"
+        rows = []
+        if f.exists():
+            for rank, d in enumerate(csv.DictReader(open(f), skipinitialspace=True), 1):
+                d = {(k or "").strip(): (v or "").strip() for k, v in d.items()}
+                m = re.match(r"pocket\.(\d+)", d.get("name", ""))
+                if not m or int(m.group(1)) not in centres:
+                    continue
+                c, n = centres[int(m.group(1))]
+                rows.append(dict(center=c, tool_score=float(d["score"]), tool_rank=rank, tool_extra=float(n)))
+        res[pdb_id] = rows
+    return res
 
 
 def run_p2rank_batch(exe: str, prots: list[pathlib.Path], work: pathlib.Path, threads: int) -> dict[str, list[dict]]:
