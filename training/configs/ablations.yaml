@@ -25,6 +25,27 @@ ablations:
   # 19 structures), so this arm carries its own balancing weight. At the default 3.0 it would be under-weighted
   # twofold and the comparison would measure class weighting as much as placement.
   probe_tiered: {data.probe_sampling: tiered, loss.occ_pos_weight: 6.5}
+  # Does degree 2 do nothing, or does it do work our detector has already done? The first ablation measured
+  # `full - no_tensors` with the probes at full strength, where the closure field b(p) over the 26 lattice
+  # directions has already supplied the enclosure -- its l=0 moment is buriedness, its l=1 moment is which way
+  # the cavity opens, its l=2 moment is slot against cone. Anisotropy of pocket shape is a genuinely degree-2
+  # quantity; we simply compute it outside the network and hand it over as where the probes are. So a null there
+  # says nothing about degree 2 in general, only about degree 2 *given that operator*.
+  #
+  # These arms cross the two axes. Along one, how much enclosure the operator supplies: ligandable placement
+  # (full) > random within buriedness tiers (tiered) > none at all (no_probes). Along the other, whether the
+  # network carries degree 2. Parameter-matched on the tensor-free side, since dropping the tensors also drops
+  # wt, 2*dim of edge input and 3*dim of gates -- 23.5 % of the model -- while dropping the probes costs nothing.
+  #
+  # The prediction the reasoning makes: the gap from removing degree 2 grows as the operator supplies less. If it
+  # does, the finding is a mechanism -- degree 2 reconstructs enclosure when nothing else provides it -- and not a
+  # null. If the gap stays flat at zero, degree 2 is genuinely idle on this task however the work is divided, and
+  # that is worth stating as such. Either way the architecture keeps the channels: `use_tensors` stays on by
+  # default, because the answer depends on where the line between operator and model is drawn, and that line
+  # moves whenever placement becomes learned.
+  no_probes_no_tensors: {model.use_probes: false, model.use_tensors: false, model.match_params: full}
+  probe_tiered_no_tensors: {data.probe_sampling: tiered, loss.occ_pos_weight: 6.5,
+                            model.use_tensors: false, model.match_params: full}
   # New mechanisms, each as a removal from the full model so the baseline is the one that ships.
   no_direction_loss: {loss.w_dir: 0.0}              # P12: the dense cosine target on every probe near one site
   no_listwise: {loss.w_listwise: 0.0}               # P2: the only term that orders probes within a structure

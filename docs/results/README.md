@@ -35,11 +35,26 @@ below roughly 0.02 is not distinguishable from noise:
 **The probes are the architecture.** They are the only component with a large effect, and the rest of the design is
 either small (degree-1 channels, +0.037) or indistinguishable from zero.
 
-**The degree-2 claim fails.** `full − no_tensors` is −0.006 with seed sd 0.008, so the lower bound is nowhere near
-zero and the arm is not even parameter-matched — it is *smaller* than `full`, which can only flatter the degree-2
-side. Degree 2 does no measurable work on this task. This was the project's second claimed contribution and the
-survey established that no such ablation exists in the literature, so the measurement is still a result; what is
-retired is the accuracy claim.
+**The degree-2 claim fails as stated.** `full − no_tensors` is −0.006 with seed sd 0.008, so the lower bound is
+nowhere near zero and the arm is not even parameter-matched — it is *smaller* than `full`, which can only flatter
+the degree-2 side. This was the project's second claimed contribution and the survey established that no such
+ablation exists in the literature, so the measurement is still a result; what is retired is the accuracy claim.
+
+But "degree 2 does no work on this task" is the wrong conclusion to draw from it, and the reason is in the
+formulation rather than in the measurement. Anisotropy of pocket shape *is* a degree-2 quantity: the closure field
+b(p) over the 26 lattice directions is a function on a sphere of directions whose l=0 moment is buriedness, whose
+l=1 moment is which way the cavity opens, and whose l=2 moment distinguishes a slot from a cone. We compute that
+field with an explicit operator and hand the result to the network as where the probes are. So the arm measures
+degree 2 *given that operator*, and a null there says only that the network need not rebuild what it was already
+given. The requirement is not a property of the task; it is a property of where the line falls between the
+geometric operator and the learned model — and that line moves as soon as placement becomes learned.
+
+`no_probes_no_tensors` and `probe_tiered_no_tensors` cross the two axes so the question can be asked properly:
+how much enclosure the operator supplies (ligandable placement > random within buriedness tiers > none) against
+whether the network carries degree 2, parameter-matched on the tensor-free side. If the cost of removing degree 2
+grows as the operator supplies less, the result is a mechanism rather than a null. If it stays flat at zero,
+degree 2 is idle however the work is divided, which is a stronger and more interesting statement than the one we
+can make now. The channels stay on by default either way.
 
 **ESM-2, the surface module and chirality do no measurable work either.** ESM-2 650M is the most expensive part of
 the whole pipeline — a frozen 650 M-parameter model, hours of embedding, a 710 MB cache — for −0.010.
