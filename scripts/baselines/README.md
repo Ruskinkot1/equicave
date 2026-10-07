@@ -54,6 +54,21 @@ when nothing else large is resident or the kernel will kill it.
 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` is set by the driver: with the C++ protobuf implementation,
 importing TensorFlow after openbabel segfaults in this environment.
 
+**Their own cap on receptor size.** `readSurfPoints` returns `None` above 100000 DMS surface points and
+`simplify_dms` unpacks it unguarded, so a large receptor arrives as `TypeError: cannot unpack non-iterable
+NoneType object`. On COACH420 it fires on the three structures above 20000 atoms (2WVA, 1E5Q, 1Q51) and no others.
+Nothing in their arguments changes it, so those structures are excluded with the reason recorded -- they are a
+property of the published method, not of this machine, and scoring them as refusals would be as wrong as hiding
+them.
+
+`failed.txt` therefore records `id<TAB>ours|theirs<TAB>reason`, and `--retry-ours` lets back in only the failures
+of ours. Two shards on a 15 GB machine do provoke OOM kills on ordinary structures (9500-16100 atoms here), which
+a serial pass afterwards recovers:
+
+    python scripts/baselines/run_deepsurf.py --set coach420 --shard 0/2 &
+    python scripts/baselines/run_deepsurf.py --set coach420 --shard 1/2 &
+    wait && python scripts/baselines/run_deepsurf.py --set coach420 --retry-ours
+
 ### The four that cannot be compared
 
 VN-EGNN, EquiPocket and GDEGAN publish no weights, so a comparison means retraining them on their data.

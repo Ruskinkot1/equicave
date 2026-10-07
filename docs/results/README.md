@@ -230,7 +230,31 @@ section claimed GrASP was significantly worse than P2Rank; that claim was an art
 withdrawn. The drivers now keep a `failed.txt` apart from the attempted list.
 
 Files: `compare_coach420_vs_dl.md` (all four, differences against P2Rank), `compare_coach420_vs_deeppocket_ref.md`
-and `compare_coach420_vs_grasp_ref.md`. DeepSurf is still running.
+and `compare_coach420_vs_grasp_ref.md`. DeepSurf is still running; the comparison will be reissued with it.
+
+### DeepSurf: two kinds of failure, and only one of them is DeepSurf's
+
+The correction above -- that our crashes must not be charged to a method -- needs the converse too: a limit written
+into the method's own code *is* the method's, and excluding it would flatter it. DeepSurf's run on COACH420 produced
+both kinds, and they are separated by reading the traceback rather than by counting.
+
+*Their limit (3 of 300 structures).* `readSurfPoints` in `utils.py` returns `None` when the DMS surface carries more
+than 100000 points, and `simplify_dms` then unpacks that `None`, so their own guard reaches us as
+`TypeError: cannot unpack non-iterable NoneType object`. It fires on exactly the three largest receptors in the set
+-- 2WVA (34156 atoms, 167163 surface points), 1E5Q (27528) and 1Q51 (25697) -- and on no others: these are the only
+three above 20000 atoms, and the point count scales with the surface, so the cap and the atom count tell the same
+story. Nothing we can configure changes it; the structures are reported as excluded, with the reason, rather than
+quietly dropped or scored as refusals.
+
+*Our limit (11 structures, retried).* The remaining failures were the bridge process dying without reporting, and
+`dmesg` names them: `oom-kill ... constraint=CONSTRAINT_MEMCG`, 5-11 GB resident against this container's 15 GB,
+with two shards resident at once. Those structures are 9555-16096 atoms -- ordinary for the set, far below their
+cap -- so the cause is our parallelism, not their code. They were rerun serially after the shards finished, and the
+count of any that still fail is reported with the table.
+
+Keeping the two apart matters for the same reason the GrASP correction did: 14 structures scored as misses would
+move DeepSurf's numbers by about 5 percentage points, in a comparison whose differences are already inside their
+confidence intervals.
 
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
