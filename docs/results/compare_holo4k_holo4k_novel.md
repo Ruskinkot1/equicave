@@ -25,6 +25,13 @@ Paired differences against **p2rank** on the same structures (positive = we are 
 | train-similar | ours (ranker) | -0.030 [-0.071, +0.008] | -0.020 [-0.050, +0.011] | +0.010 [-0.008, +0.029] |
 | train-similar | ours (native order) | -0.225 [-0.326, -0.138] | -0.168 [-0.263, -0.086] | -0.050 [-0.115, +0.003] |
 
+**Composition of the hard-novelty subset.** Filtering by homology also filters by whatever correlates with it, so the aggregate difference below is not purely a leakage effect. These are the two populations the filter separated:
+
+| population | structures | sites per structure | single-site | >= 3 sites |
+|---|---|---|---|---|
+| kept (novel) | 1019 | 2.07 | 0.47 | 0.20 |
+| removed (homologous) | 2318 | 1.85 | 0.53 | 0.16 |
+
 Top-N by the structure's own number of sites, against **p2rank**. At N = 1 top-N is top-1 and no merging of predictions can change it, so a deficit in that row is ranking and a deficit confined to N >= 2 is prediction fragmentation:
 
 | subset | method | N | n | top-N | p2rank top-N | difference | ceiling | p2rank ceiling |

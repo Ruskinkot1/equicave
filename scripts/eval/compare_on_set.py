@@ -65,6 +65,7 @@ def main():
     a = ap.parse_args()
     if a.out_tag is None:
         a.out_tag = a.tag
+    novel_note = None
 
     ours = pd.read_csv(DS / f"eval_candidates_{a.set}{a.tag}.csv")
     if a.novel_only:
@@ -72,12 +73,30 @@ def main():
         if not corpus.exists():
             sys.exit(f"{corpus} is missing: run scripts/eval/homology_control.py first")
         seen = set(json.loads(corpus.read_text())["clusters"])
-        before = ours["pdb"].nunique()
-        ours = ours[~ours["cluster30"].astype(str).isin(seen)]
+        all_u = ours.drop_duplicates("pdb")
+        keep = ~all_u["cluster30"].astype(str).isin(seen)
+        # The composition of what survives, because filtering by homology also filters by everything correlated
+        # with it. Measured once: on HOLO4K the novel subset carries 2.17 sites per structure against 1.86 for the
+        # removed one, and multi-site structures are where we are relatively stronger -- so the aggregate gap
+        # closed for a reason that had nothing to do with leakage. Read the per-site-count table below, not the
+        # aggregate, and this block says how far apart the two populations are before you do.
+        comp = []
+        for lab, sub in (("kept (novel)", all_u[keep]), ("removed (homologous)", all_u[~keep])):
+            ns = sub["n_sites"]
+            comp.append((lab, len(sub), float(ns.mean()) if len(sub) else float("nan"),
+                         float((ns == 1).mean()) if len(sub) else float("nan"),
+                         float((ns >= 3).mean()) if len(sub) else float("nan")))
+        ours = ours[ours["pdb"].isin(all_u.loc[keep, "pdb"])]
         if ours.empty:
             sys.exit("no structure of this set is novel against the corpus")
-        print(f"hard-novelty subset: {ours['pdb'].nunique()} of {before} structures, "
+        print(f"hard-novelty subset: {ours['pdb'].nunique()} of {len(all_u)} structures, "
               f"{ours['cluster30'].nunique()} clusters")
+        for lab, n, mean, one, many in comp:
+            print(f"  {lab:22s} n={n:5d}  sites/structure {mean:.2f}  single-site {one:.2f}  >=3 sites {many:.2f}")
+        if len(comp) == 2 and abs(comp[0][2] - comp[1][2]) > 0.1:
+            print("  NOTE: the two populations differ in site count, so any aggregate shift is partly composition. "
+                  "The per-site-count table is the one to read.")
+        novel_note = comp
     train_cl = train_clusters()
     if "cluster30" not in ours:
         ours["cluster30"] = ours["pdb"]
@@ -158,6 +177,13 @@ def main():
     # Where the difference lives. At N = 1 top-N is top-1, so merging predictions cannot move it: any deficit there
     # is the ranker putting the wrong candidate first, not fragments eating the budget. Splitting by the structure's
     # own site count separates the two explanations, which the aggregate top-N hides.
+    if a.novel_only and novel_note:
+        lines += ["", "**Composition of the hard-novelty subset.** Filtering by homology also filters by whatever "
+                  "correlates with it, so the aggregate difference below is not purely a leakage effect. These are "
+                  "the two populations the filter separated:", "",
+                  "| population | structures | sites per structure | single-site | >= 3 sites |",
+                  "|---|---|---|---|---|"]
+        lines += [f"| {lab} | {n} | {mean:.2f} | {one:.2f} | {many:.2f} |" for lab, n, mean, one, many in novel_note]
     if ref:
         lines += ["", f"Top-N by the structure's own number of sites, against **{ref}**. At N = 1 top-N is top-1 and "
                   "no merging of predictions can change it, so a deficit in that row is ranking and a deficit "
