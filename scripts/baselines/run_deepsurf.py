@@ -121,6 +121,13 @@ def main():
             part += f.name.startswith(f"part_s{a.shard.split(chr(47))[0]}_") if a.shard else 1
         if attempted.exists():
             seen |= {l.strip() for l in attempted.read_text().splitlines() if l.strip()}
+        # A structure our pipeline already died on is not retried: the failures seen here are deterministic (a
+        # structure too large for the memory this machine has), and each retry costs a process start-up to fail
+        # again. failed.txt is written as it happens while the attempted list is flushed in batches, so after an
+        # interruption it is the more complete record of the two.
+        failed_file = chunk_dir / "failed.txt"
+        if failed_file.exists():
+            seen |= {l.strip() for l in failed_file.read_text().splitlines() if l.strip()}
         if seen:
             print(f"  resuming: {len(seen)} structures already done, {len(recs)} predictions kept")
     rows = [r for r in rows if r["pdb"] not in seen]
