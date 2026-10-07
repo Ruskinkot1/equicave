@@ -75,3 +75,17 @@ VN-EGNN, EquiPocket and GDEGAN publish no weights, so a comparison means retrain
 PointSite commits its weights and its bundled SparseConvNet builds once `setup.py`'s `-std=c++11` becomes
 `-std=c++20` for current torch headers, but the compile exhausts memory here; it also segments binding *atoms*
 rather than ranking sites, so any top-N for it would depend on a clustering we would have to choose on its behalf.
+
+
+## CryptoBench needs the apo/holo pairing, so the baselines are not run on it
+
+`eval_set_to_manifest.py` writes each CryptoBench row's relevant ligand from the entry's **holo** partner, because
+that is where the ligand is: the apo structure is the one without it. `run_competitors.py` then looks for that
+ligand code inside the apo file, finds nothing, and drops the structure. A first run produced 3 rows out of 228 --
+the three where the holo ligand's code happens to occur in the apo file too, which is coincidence rather than
+signal. That table was deleted rather than kept.
+
+Doing it properly means superposing the holo structure onto the apo one and transferring the ligand, which is what
+`evaluate.py` already does through the `holo_pdb_id` note and `equicave.superpose`. The baseline path does not,
+so no competitor number exists for CryptoBench and none should be quoted. Our own CryptoBench numbers are
+unaffected: they come through `evaluate.py`, which performs the transfer.
