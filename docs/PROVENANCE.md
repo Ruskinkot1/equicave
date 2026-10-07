@@ -37,3 +37,11 @@ Where an idea comes from a publication, it is listed below with the form in whic
 - YuelPocket's published weights and its mandatory ligand input were checked in its repository, 2026-10-06
   [проверено]; its licence is still not stated there [не найдено].
 - ESM-2 licence (MIT) is [из памяти] in this session: the model card was not opened from the primary source.
+- Gaussian Dynamic Attention is taken as an idea from GDEGAN (Wang et al., arXiv 2603.19817, 2026), read from the
+  arXiv PDF on 2026-10-07 [проверено]. What is borrowed is the form of the attention score — a Gaussian kernel on
+  variance-normalised feature differences with a learnable width per head, in place of a learned key-query
+  projection — and the observation that it preserves the backbone's equivariance because it reads only invariant
+  features. No code was consulted or copied; `GeoTensorAttention.attn_logits` and `seg_mean` are written here, and
+  the per-destination normalisation is our own choice, made so the statistics cannot cross a structure boundary.
+  Their Table 1 and Figure 4a are used as evidence in `docs/results/README.md`; their licence is not stated in the
+  preprint [не найдено], which is why only the idea and the published numbers are used.

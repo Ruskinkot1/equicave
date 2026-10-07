@@ -60,6 +60,11 @@ model:
   # position is supervised. `probe_flow` is the arm.
   probe_update: center       # center | flow
   flow_step: 2.0
+  # dot: attention logits from the edge MLP, the original form. gaussian: a kernel on variance-normalised feature
+  # differences with one learnable width per head, after Gaussian Dynamic Attention (Wang et al. 2026). It reads
+  # only invariants, so equivariance is unchanged, and it costs `layers * heads` parameters against the O(dim^2) a
+  # key-query projection would. Their own ablation puts it at about +3.3 % DCC over dot-product on the same model.
+  attn_kernel: dot           # dot | gaussian
 loss:
   hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
   mask_frac: 0.15            # self-supervised masked-residue task

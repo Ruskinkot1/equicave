@@ -42,6 +42,12 @@ ablations:
   # Probe motion: one jump onto the predicted centre against several steps along the predicted direction.
   probe_flow: {model.probe_update: flow}
   probe_flow_4: {model.probe_update: flow, model.recycles: 4}
+  # The attention kernel, which is a layer-family change and not a symmetry one. The symmetry question is already
+  # answered against itself: removing degree-2 costs -0.006 and removing chirality +0.000, so neither a higher
+  # degree nor a change of group is where the gain is. What the current literature does report is the shape of the
+  # attention. Wang et al. 2026 measure +3.3 % DCC from this kernel alone on a GotenNet backbone like ours.
+  gaussian_attn: {model.attn_kernel: gaussian}
+  gaussian_attn_4: {model.attn_kernel: gaussian, model.layers: 4}
   # Spend the parameters where the measurement says they work: no degree-2 channels, no chirality, no surface
   # module, no language model -- all four were within seed noise -- and the saving reinvested in depth and probes.
   # This is the model the ablation argues for, and it is a prediction that can fail.

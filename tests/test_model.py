@@ -535,3 +535,66 @@ def test_a_bf16_stream_takes_a_training_step():
                                torch.tensor([[0.0, 0.0, 0.0]])))
     loss.backward()
     assert any(p.grad is not None and torch.isfinite(p.grad.float()).all() for p in net.parameters())
+
+
+# --- Gaussian dynamic attention ---------------------------------------------------------------------------------
+# A kernel on variance-normalised feature differences instead of the edge MLP's learned logits, after Gaussian
+# Dynamic Attention (Wang et al. 2026). It reads only the invariant stream, so the claim it has to survive is that
+# equivariance is untouched; and it must actually differ from the dot-product form, or the arm measures nothing.
+
+
+@pytest.mark.parametrize("use_tensors,chiral", [(True, True), (False, False)])
+def test_gaussian_attention_is_still_so3_equivariant(use_tensors, chiral):
+    torch.manual_seed(0)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=32, layers=2, heads=4, use_tensors=use_tensors,
+                        chiral=chiral, attn_kernel="gaussian").eval()
+    b = _batch(); R = _rot(); t = torch.tensor([3.0, -2.0, 1.0])
+    with torch.no_grad():
+        o1 = net(b); o2 = net(_apply(b, R, t))
+    for k in ("res_logit", "occ_logit", "conf_logit", "hot_logit", "prop_logit"):
+        assert torch.allclose(o1[k], o2[k], atol=1e-4), k
+    assert torch.allclose(o1["offset"] @ R.T, o2["offset"], atol=1e-4)
+    assert torch.allclose(o1["center"] @ R.T + t, o2["center"], atol=1e-4)
+
+
+def test_gaussian_attention_changes_the_model():
+    torch.manual_seed(0)
+    kw = dict(dim=32, layers=2, heads=4)
+    torch.manual_seed(0); a = M.EquiCaveNet(dict(res=5, probe=4, surf=6), attn_kernel="dot", **kw).eval()
+    torch.manual_seed(0); g = M.EquiCaveNet(dict(res=5, probe=4, surf=6), attn_kernel="gaussian", **kw).eval()
+    b = _batch()
+    with torch.no_grad():
+        assert not torch.allclose(a(b)["occ_logit"], g(b)["occ_logit"], atol=1e-5)
+
+
+def test_gaussian_attention_costs_one_parameter_per_head_per_layer():
+    kw = dict(dim=32, layers=2, heads=4)
+    a = sum(p.numel() for p in M.EquiCaveNet(dict(res=5, probe=4, surf=6), attn_kernel="dot", **kw).parameters())
+    g = sum(p.numel() for p in M.EquiCaveNet(dict(res=5, probe=4, surf=6), attn_kernel="gaussian", **kw).parameters())
+    assert g - a == 2 * 4, (a, g)      # layers x heads, against the O(dim^2) a key-query projection would cost
+
+
+def test_the_kernel_width_adapts_to_the_neighbourhood():
+    # The point of the thing: a destination whose neighbours differ from it in a varied way must not get the same
+    # attention profile as one whose neighbours are uniformly similar. If the normalisation were global rather
+    # than per destination node, these two would be driven to the same distribution.
+    torch.manual_seed(0)
+    layer = M.GeoTensorAttention(dim=8, heads=2, attn_kernel="gaussian").eval()
+    x = torch.zeros(7, 8)
+    x[1:4] = torch.tensor([0.1, 0.2, 0.3])[:, None]          # node 0: a tight neighbourhood
+    x[4:7] = torch.tensor([1.0, 5.0, 20.0])[:, None]         # node 6: a spread-out one
+    src = torch.tensor([1, 2, 3, 4, 5, 6])
+    dst = torch.tensor([0, 0, 0, 6, 6, 6])
+    with torch.no_grad():
+        lg = layer.attn_logits(torch.zeros(6, 2), x, src, dst, 7)
+        a = M.seg_softmax(lg, dst, 7)
+    tight, spread = a[:3, 0], a[3:, 0]
+    assert torch.isfinite(a).all()
+    assert abs(float(tight.std() - spread.std())) > 1e-6, (tight, spread)
+
+
+def test_seg_mean_is_a_mean_per_destination():
+    v = torch.tensor([[1.0], [3.0], [10.0]])
+    idx = torch.tensor([0, 0, 1])
+    got = M.seg_mean(v, idx, 3)
+    assert torch.allclose(got, torch.tensor([[2.0], [10.0], [0.0]]))

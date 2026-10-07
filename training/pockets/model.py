@@ -56,6 +56,15 @@ def add_into(dest: torch.Tensor, index: torch.Tensor, src: torch.Tensor) -> torc
     return dest.index_add_(0, index, src.to(dest.dtype))
 
 
+def seg_mean(v: torch.Tensor, index: torch.Tensor, n: int) -> torch.Tensor:
+    """Mean of `v` [E, F] over the edges sharing a destination, in float32 for the reason `seg_softmax` gives."""
+    val = v.float()
+    tot = torch.zeros((n, val.shape[1]), device=val.device, dtype=val.dtype).index_add_(0, index, val)
+    cnt = torch.zeros((n, 1), device=val.device, dtype=val.dtype).index_add_(
+        0, index, torch.ones((len(index), 1), device=val.device, dtype=val.dtype))
+    return tot / cnt.clamp(min=1.0)
+
+
 def seg_softmax(logits: torch.Tensor, index: torch.Tensor, n: int) -> torch.Tensor:
     """Softmax of `logits` [E, H] over groups given by `index` [E] (destination nodes).
 
@@ -109,10 +118,17 @@ class GeoTensorAttention(nn.Module):
     """One message-passing layer with attention over invariants and gated degree-0/1/2 messages."""
     def __init__(self, dim: int, heads: int = 4, n_rbf: int = 32, cutoff: float = 10.0, n_edge_types: int = 9,
                  use_vectors: bool = True, use_tensors: bool = True, chiral: bool = True, dropout: float = 0.0,
-                 n_edge_scalar: int = 0):
+                 n_edge_scalar: int = 0, attn_kernel: str = "dot"):
         super().__init__()
         assert dim % heads == 0
+        assert attn_kernel in ("dot", "gaussian")
         self.dim, self.heads, self.use_vectors, self.use_tensors, self.chiral = dim, heads, use_vectors, use_tensors and use_vectors, chiral
+        self.attn_kernel = attn_kernel
+        if attn_kernel == "gaussian":
+            # One temperature per head, passed through softplus so it stays positive. Initialised at
+            # softplus(0.5413) = 1, which makes the kernel's starting width the identity scale of the normalised
+            # differences; heads then specialise on their own.
+            self.xi = nn.Parameter(torch.full((heads,), 0.5413))
         self.n_edge_scalar = n_edge_scalar
         self.rbf = RBF(n_rbf, cutoff)
         self.etype = nn.Embedding(n_edge_types, 16)
@@ -129,6 +145,32 @@ class GeoTensorAttention(nn.Module):
         self.norm = EqNorm(dim)
         self.drop = nn.Dropout(dropout)
         self.register_buffer("tri", torch.tensor([[0, 1, 2], [3, 4, 5], [1, 2, 6], [0, 4, 7]]))
+
+    def attn_logits(self, learned, x, src, dst, n):
+        """Attention logits: the edge MLP's own, or a Gaussian kernel on variance-normalised feature differences.
+
+        The Gaussian form follows Gaussian Dynamic Attention (Wang et al. 2026, arXiv 2603.19817), recorded in
+        docs/PROVENANCE.md; the implementation here is ours. The score is
+
+            alpha_ij  ~  exp( -|| (x_i - x_j) / sd_{N(i)} ||^2 / (2 xi_h) )
+
+        with the standard deviation taken per destination node over its own incoming edges, so the width adapts to
+        how varied a neighbourhood is rather than being a single learned projection. Two properties matter here.
+        It reads only the invariant stream `x`, so the layer stays exactly as equivariant as it was -- the kernel
+        cannot see a rotation. And it is a per-head scalar rather than a key-query matrix, so it adds `heads`
+        parameters instead of O(dim^2); on this model that is 8 against the ~33 k a projection pair would cost.
+
+        The statistics are per destination node and therefore never cross a structure boundary, since no edge does.
+        """
+        if self.attn_kernel == "dot":
+            return learned
+        H = self.heads
+        df = (x[dst] - x[src]).float()
+        mu = seg_mean(df, dst, n)
+        var = seg_mean((df - mu[dst]) ** 2, dst, n)
+        ds = df / (var[dst] + 1e-6).sqrt()
+        q = ds.view(-1, H, self.dim // H).pow(2).mean(-1)                  # [E, H], mean so width is dim-free
+        return (-q / (2.0 * (nn.functional.softplus(self.xi) + 1e-3))).to(learned.dtype)
 
     def forward(self, x, V, T, pos, edge_index, edge_type, edge_scalar=None):
         src, dst = edge_index                  # message j=src -> i=dst
@@ -158,7 +200,7 @@ class GeoTensorAttention(nn.Module):
         # `.to(dt)`: the MLP ends in a normalisation, which autocast runs in float32, so its output -- and the
         # gates and attention logits taken from it -- come back float32 even when the stream is bf16.
         out = self.edge_mlp(torch.cat(inv, -1)).to(dt)
-        att = seg_softmax(out[:, :H], dst, n)                              # [E, H]
+        att = seg_softmax(self.attn_logits(out[:, :H], x, src, dst, n), dst, n)   # [E, H]
         a = att.repeat_interleave(F // H, dim=1).to(dt)                    # [E, F]; softmax runs in fp32
         gates = out[:, H:].view(-1, self.n_gates, F)
         g = iter(gates.unbind(1))
@@ -330,7 +372,7 @@ class EquiCaveNet(nn.Module):
                  recycles: int = 0, n_edge_scalar: int = 0, n_res_types: int = 21,
                  invariant_mode: str = "frames", site_decoder: bool = True, site_layers: int = 2,
                  n_site_tokens: int = 32, site_nms: float = 6.0, site_membership: float = 8.0,
-                 probe_update: str = "center", flow_step: float = 2.0, **_ignored):
+                 probe_update: str = "center", flow_step: float = 2.0, attn_kernel: str = "dot", **_ignored):
         super().__init__()
         self.dim, self.equivariant = dim, equivariant
         self.recycles, self.n_edge_scalar = recycles, n_edge_scalar
@@ -346,7 +388,7 @@ class EquiCaveNet(nn.Module):
         self.type_emb = nn.Embedding(3, dim)
         self.vec_in = nn.Linear(n_init_vec, dim, bias=False)
         self.layers = nn.ModuleList([GeoTensorAttention(dim, heads, n_rbf, cutoff, 9, self.use_vectors, self.use_tensors, chiral,
-                                                        dropout, n_edge_scalar) for _ in range(layers)])
+                                                        dropout, n_edge_scalar, attn_kernel) for _ in range(layers)])
         self.head_res = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
         self.head_occ = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
         self.head_conf = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
