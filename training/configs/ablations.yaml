@@ -69,6 +69,11 @@ ablations:
   # attention. Wang et al. 2026 measure +3.3 % DCC from this kernel alone on a GotenNet backbone like ours.
   gaussian_attn: {model.attn_kernel: gaussian}
   gaussian_attn_4: {model.attn_kernel: gaussian, model.layers: 4}
+  # Augmentation, at the published sigmas. The one clean data-versus-augmentation experiment in this field puts
+  # noise at about four times the value of 2.6x the training structures, and we currently augment only by
+  # rotation, which an equivariant model is invariant to by construction -- so we are not augmenting at all.
+  noise_aug: {optim.augment: {pos: 0.5, feat: 0.3, drop: 0.03}}
+  noise_aug_pos: {optim.augment: {pos: 0.5, feat: 0.0, drop: 0.0}}    # which of the three carries it
   # Spend the parameters where the measurement says they work: no degree-2 channels, no chirality, no surface
   # module, no language model -- all four were within seed noise -- and the saving reinvested in depth and probes.
   # This is the model the ablation argues for, and it is a prediction that can fail.

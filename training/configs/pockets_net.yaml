@@ -103,4 +103,8 @@ optim:
   patience: 10
   seed: 0
   rotate: true
+  # Noise augmentation. Rotation is a no-op for an equivariant model, so these are the only augmentations that
+  # actually train an invariance we do not already have. The sigmas are the ones Shiota et al. measured (PLOS ONE
+  # 2024), where this was worth +0.0976 combined PR-AUC against +0.0256 for 2.6x the training structures.
+  augment: {pos: 0.0, feat: 0.0, drop: 0.0}     # off by default; the `noise_aug` arm turns it on
   amp: bf16

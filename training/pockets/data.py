@@ -358,6 +358,66 @@ def random_rotation(b: dict, rng: np.random.Generator):
     return b
 
 
+def jitter(b: dict, rng: np.random.Generator, pos: float = 0.0, feat: float = 0.0, drop: float = 0.0):
+    """Coordinate, feature and node-dropout noise, the three published augmentations for this task.
+
+    Shiota et al. (PLOS ONE 2024, 10.1371/journal.pone.0308425) is the one clean data-versus-augmentation
+    experiment in binding-site prediction: the same model, the same test set and the same identity filter, with
+    noise augmentation worth +0.0976 combined PR-AUC against +0.0256 for 2.6x the training structures and +0.0012
+    for class balancing. Augmentation is about four times the value of more data at this scale, and the sigmas
+    here are theirs rather than ours -- 0.5 A on positions, 0.3 on features, 0.03 node drop.
+
+    Why it should help a model that is already equivariant: rotation augmentation is a no-op for us, so the only
+    invariance we currently train is one we already had by construction. These three are different -- coordinate
+    noise asks the model to tolerate the resolution and conformational slack that separates one crystal form from
+    another, which is exactly what fails when the test structure is a different deposition of the same fold.
+
+    Nodes are dropped from the graph, so the edges touching them go too; a structure never drops below one node.
+    """
+    import torch
+    if not (pos or feat or drop):
+        return b
+    b = dict(b)
+    dev = b["pos"].device
+    if pos:
+        b["pos"] = b["pos"] + torch.tensor(rng.normal(0, pos, b["pos"].shape), dtype=b["pos"].dtype, device=dev)
+    if feat:
+        for k in ("feat_res", "feat_probe", "feat_surf"):
+            if k in b and b[k].numel():
+                b[k] = b[k] + torch.tensor(rng.normal(0, feat, tuple(b[k].shape)), dtype=b[k].dtype, device=dev)
+    if drop:
+        n = b["pos"].shape[0]
+        keep = torch.tensor(rng.random(n) >= drop, device=dev)
+        if not bool(keep.any()):
+            return b
+        b = drop_nodes(b, keep)
+    return b
+
+
+def drop_nodes(b: dict, keep):
+    """Keep the nodes `keep` marks, renumber the edges, and shrink every per-node and per-slice tensor with them."""
+    import torch
+    dev = b["pos"].device
+    n = b["pos"].shape[0]
+    idx = torch.full((n,), -1, dtype=torch.long, device=dev)
+    idx[keep] = torch.arange(int(keep.sum()), device=dev)
+    out = dict(b)
+    for k, v in b.items():
+        if torch.is_tensor(v) and v.shape[:1] == (n,) and k not in ("edge_index", "edge_type"):
+            out[k] = v[keep]
+    ei = b["edge_index"]
+    live = keep[ei[0]] & keep[ei[1]]
+    out["edge_index"] = idx[ei[:, live]]
+    if "edge_type" in b:
+        out["edge_type"] = b["edge_type"][live]
+    if "edge_scalar" in b and torch.is_tensor(b["edge_scalar"]) and len(b["edge_scalar"]) == ei.shape[1]:
+        out["edge_scalar"] = b["edge_scalar"][live]
+    if "slices" in b:
+        # Slices index nodes by type; each becomes the surviving members under the new numbering.
+        out["slices"] = {k: idx[v[keep[v]]] for k, v in b["slices"].items()}
+    return out
+
+
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,
                 n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
                 require_interaction: bool = True, residue_chemistry: bool = True,

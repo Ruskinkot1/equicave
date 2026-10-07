@@ -379,6 +379,8 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
                 b = D.to_torch(D.load(files_tr[j]), device)
                 if cfg["optim"]["rotate"]:
                     b = D.random_rotation(b, rng)
+                aug = cfg["optim"].get("augment", {}) or {}
+                b = D.jitter(b, rng, pos=aug.get("pos", 0.0), feat=aug.get("feat", 0.0), drop=aug.get("drop", 0.0))
                 b, res_mask = D.mask_residues(b, cfg["loss"].get("mask_frac", 0.15), rng)
                 b, pot_mask, pot_target = D.mask_probe_potential(b, cfg["loss"].get("pot_mask_frac", 0.2), rng)
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
