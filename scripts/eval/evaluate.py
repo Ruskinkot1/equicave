@@ -136,7 +136,7 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
             scores["network only"] = [e["net_site_score"] for e in extra]
         else:
             scores["network only"] = [e["net_center_conf"] + e["net_seg"] for e in extra]
-    return [dict(center=r["center"], **{k: v[i] for k, v in scores.items()}) for i, r in enumerate(rows)]
+    return [dict(center=r["center"], points=cands[i].get("points"), **{k: v[i] for k, v in scores.items()}) for i, r in enumerate(rows)]
 
 
 def one(task):
@@ -214,17 +214,29 @@ def _one(task):
         import torch
         net_model, net_cfg = NT.load_model(args["net"], torch.device("cpu"))
     preds = predict_native(st, ranker, net_model, net_cfg, path, esm, point_model)
+    # The volume metrics need a free lattice shared by the prediction and the answer. Both DCC and DCA collapse a
+    # pocket to its centre, so a prediction covering a tenth of the site and one engulfing half the protein are
+    # indistinguishable to them; the segmentation line of the literature reports DVO alongside DCC for that
+    # reason. The free grid is the detector's own, recomputed here so the true volume does not depend on which
+    # candidates were found -- otherwise a missed site would have an empty answer and the metric could not
+    # compare methods.
+    free = pk.free_grid(st["xyz"])[0] if len(st["xyz"]) else np.empty((0, 3))
+    site_vol = [pk.site_voxels(a, free) for a in site_atoms]
     out = []
     for p in preds:
         d = pk.dca(p["center"], L)
         dcc_per_site = [pk.dcc(p["center"], a) for a in site_atoms]
         dca_per_site = [pk.dca(p["center"], a) for a in site_atoms]
         j = int(np.argmin(dca_per_site))                       # the site this prediction is closest to
+        pts = p.get("points")
+        dvo = float(pk.dvo(pts, site_vol[j])) if pts is not None and len(site_vol[j]) else float("nan")
+        pli = float(pk.pli(pts, site_atoms[j])) if pts is not None else float("nan")
         out.append(dict(pdb=pdb, chain=chains, n_sites=ns, dca=d, dcc=min(dcc_per_site), site_idx=j,
                         label=int(d <= 4.0), label_dcc=int(min(dcc_per_site) <= 4.0),
                         label_dcc10=int(min(dcc_per_site) <= 10.0), label_dcc12=int(min(dcc_per_site) <= 12.0),
+                        dvo=dvo, pli=pli,
                         center=";".join(f"{x:.2f}" for x in p["center"]),
-                        **{k: v for k, v in p.items() if k != "center"}))
+                        **{k: v for k, v in p.items() if k not in ("center", "points", "buried")}))
     return dict(pdb=pdb, status="ok", n_sites=ns, n_cands=len(preds)), out
 
 
