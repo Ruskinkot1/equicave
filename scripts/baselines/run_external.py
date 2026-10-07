@@ -108,14 +108,36 @@ def run_fpocket_prank_batch(fpocket: str, prank: str, prots: list[pathlib.Path],
     return res
 
 
+def _errors(r, limit: int = 20) -> str:
+    """The lines of a run's output that say what went wrong.
+
+    P2Rank writes thousands of INFO lines to stdout and nothing to stderr, so the last 2000 characters -- which is
+    what this used to report -- are per-pocket scores from whichever structure happened to finish last, and the
+    actual exception is thousands of lines above. Without this the first failure here cost a search through the
+    output directory to find out what had happened.
+    """
+    out = [l for l in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines()
+           if any(k in l for k in ("[ERROR]", "Exception", "Caused by", "error processing"))]
+    return "\n".join(out[:limit]) or (r.stderr or r.stdout or "")[-1500:]
+
+
 def run_p2rank_batch(exe: str, prots: list[pathlib.Path], work: pathlib.Path, threads: int) -> dict[str, list[dict]]:
     # P2Rank resolves a dataset's protein paths relative to the dataset file, so a relative path here becomes
     # <work>/<relative path> and every structure is reported missing. Absolute paths are the only safe form.
     ds = work / "all.ds"
     ds.write_text("HEADER: protein\n\n" + "".join(f"{p.resolve()}\n" for p in prots))
-    r = subprocess.run([exe, "predict", str(ds), "-o", str(work / "out"), "-threads", str(threads)], capture_output=True, text=True, env=ENV)
+    r = subprocess.run([exe, "predict", str(ds), "-o", str(work / "out"), "-threads", str(threads)],
+                       capture_output=True, text=True, env=ENV)
+    # P2Rank exits non-zero when *any* dataset item fails, having processed all the others. Treating that as a
+    # failed run threw away 3323 completed LIGYSIS structures because one, 4CBO, carries a residue BioJava cannot
+    # type. So a non-zero exit is a warning: the run is a failure only when it produced nothing at all, and a
+    # structure with no output simply has no rows, which the refusal bookkeeping already handles.
+    done = len(list((work / "out").glob("*_predictions.csv"))) if (work / "out").is_dir() else 0
+    if r.returncode and not done:
+        sys.exit("P2Rank produced nothing:\n" + _errors(r))
     if r.returncode:
-        sys.exit("P2Rank failed:\n" + (r.stderr or r.stdout)[-2000:])
+        print(f"  P2Rank exited {r.returncode} with {done} of {len(prots)} structures done; "
+              f"the rest have no rows:\n" + _errors(r, 6))
     res = {}
     for p in prots:
         f = work / "out" / f"{p.name}_predictions.csv"
