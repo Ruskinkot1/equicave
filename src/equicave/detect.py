@@ -142,6 +142,65 @@ def _split_cavities(lo, step, free, bur, min_buried, nms, min_points, tier):
     return cands
 
 
+def grow_volumes(cands: list[dict], radius: float = 4.0) -> list[dict]:
+    """Give each candidate the cavity points within `radius` of its own, without changing how many there are.
+
+    The detector partitions a cavity among its buriedness peaks, so one peak group covers a fraction of a pocket
+    and the ligand's envelope spans several. That is why DVO is capped near 0.07 on the raw groups. Merging whole
+    cavities fixes the volume and costs the candidate ceiling, measured at 1.000 falling to 0.921 on 38 COACH420
+    structures -- below P2Rank's 0.925, which is the one place we lead. Growing instead lets volumes overlap: each
+    candidate keeps its own centre and its place in the ranking, and only the extent it claims changes.
+
+    Members are taken from the parent cavity alone, so a grown volume never crosses into a different pocket.
+    """
+    by_cavity: dict = {}
+    for c in cands:
+        by_cavity.setdefault(c.get("cavity", id(c)), []).append(c)
+    out = []
+    for c in cands:
+        pool = by_cavity.get(c.get("cavity", id(c)), [c])
+        if len(pool) == 1:
+            out.append(dict(c)); continue
+        allpts = np.unique(np.vstack([m["points"] for m in pool]), axis=0)
+        keep = cKDTree(c["points"]).query(allpts, k=1, distance_upper_bound=radius)[0]
+        pts = allpts[np.isfinite(keep)]
+        out.append(dict(c, points=pts, n_points=len(pts)))
+    return out
+
+
+def merge_by_cavity(cands: list[dict]) -> list[dict]:
+    """One prediction per connected cavity instead of one per buriedness peak.
+
+    The detector splits each cavity at peaks of the smoothed buriedness field, so a single pocket arrives as
+    several candidates: thirty per structure against P2Rank's eight and DeepSurf's two. Two measurements say that
+    costs us. A candidate holds a median of 21 lattice points while a ligand's own envelope runs to several
+    hundred, which caps DVO near 0.07 however well placed the prediction is; and top-N divides by the structure's
+    site count, so fragments of one pocket eat the budget that other pockets need.
+
+    Merging is not free and the arm exists to price it: two ligands sharing one connected cavity become one
+    prediction, and the candidate ceiling can only fall. The merged record keeps the best member's centre -- the
+    deepest peak, not the cavity's centroid, which for a long groove would sit in no pocket at all -- while the
+    volume, the score and the point count become the whole cavity's.
+    """
+    by_cavity: dict = {}
+    for c in cands:
+        by_cavity.setdefault(c.get("cavity", id(c)), []).append(c)
+    out = []
+    for members in by_cavity.values():
+        best = max(members, key=lambda c: c["score"])
+        pts = np.vstack([m["points"] for m in members]) if len(members) > 1 else best["points"]
+        pts = np.unique(pts, axis=0)
+        bur = np.concatenate([m["buried"] for m in members]) if len(members) > 1 else best["buried"]
+        out.append(dict(best, points=pts, buried=bur, n_points=len(pts),
+                        score=float(sum(m["score"] for m in members)),
+                        mean_buried=float(np.mean(bur)), max_buried=float(np.max(bur)),
+                        n_merged=len(members)))
+    out.sort(key=lambda c: -c["score"])
+    for i, c in enumerate(out, 1):
+        c["rank"] = i
+    return out
+
+
 def candidate_table(cands: list[dict]) -> list[dict]:
     """Flat, JSON-friendly rows (no point arrays): the native features every candidate carries into the ranker."""
     mx = max([c["score"] for c in cands] + [1e-9])

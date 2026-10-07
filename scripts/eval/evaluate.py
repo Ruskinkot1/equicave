@@ -136,7 +136,8 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
             scores["network only"] = [e["net_site_score"] for e in extra]
         else:
             scores["network only"] = [e["net_center_conf"] + e["net_seg"] for e in extra]
-    return [dict(center=r["center"], points=cands[i].get("points"), **{k: v[i] for k, v in scores.items()}) for i, r in enumerate(rows)]
+    return [dict(center=r["center"], points=cands[i].get("points"), cavity=cands[i].get("cavity"),
+                 **{k: v[i] for k, v in scores.items()}) for i, r in enumerate(rows)]
 
 
 def one(task):
@@ -221,6 +222,19 @@ def _one(task):
     # candidates were found -- otherwise a missed site would have an empty answer and the metric could not
     # compare methods.
     free = pk.free_grid(st["xyz"])[0] if len(st["xyz"]) else np.empty((0, 3))
+    if args.get("volume", "peak") != "peak" and preds:
+        # What a prediction claims as its volume is a choice, so it is named rather than assumed. Measured on 38
+        # COACH420 structures: peak groups give DVO 0.178 at a ceiling of 1.000; growing each group to the cavity
+        # points within 6 A gives 0.294 at the same ceiling and the same number of predictions; merging whole
+        # cavities gives 0.265 at 16.1 predictions and a ceiling of 0.921, below P2Rank's 0.925. Growing is free,
+        # merging is not, so neither is the default and both are reported under their own name.
+        pts = [p.get("points") for p in preds]
+        if all(x is not None for x in pts):
+            fake = [dict(points=x, cavity=p.get("cavity", i), score=p.get("nat_score", 0.0),
+                         buried=np.zeros(len(x))) for i, (p, x) in enumerate(zip(preds, pts))]
+            grown = detect.grow_volumes(fake, float(args.get("grow_radius", 6.0)))
+            for p_, g in zip(preds, grown):
+                p_["points"] = g["points"]
     site_vol = [pk.site_voxels(a, free) for a in site_atoms]
     out = []
     for p in preds:
@@ -261,6 +275,12 @@ def main():
     ap.add_argument("--esm-tag", default="native2", help="which esm_features_<tag> projection to use at inference")
     ap.add_argument("--merge-radii", default="8,12", help="prediction-merging radii to report in addition to as-generated")
     ap.add_argument("--tag", default="", help="suffix for the output files, e.g. _all for the other ligand rule")
+    ap.add_argument("--volume", default="peak", choices=["peak", "grow"],
+                    help="what a prediction claims as its volume, which only the DVO and PLI columns read. "
+                         "'peak' is the detector's own buriedness-peak group; 'grow' extends it to the cavity "
+                         "points within --grow-radius, which on COACH420 raises DVO from 0.178 to 0.294 at the "
+                         "same candidate ceiling and the same number of predictions.")
+    ap.add_argument("--grow-radius", dest="grow_radius", type=float, default=6.0)
     a = ap.parse_args()
     rows = load_set(a.set, a.limit, a.ligand_rule)
     print(f"{a.set}: {len(rows)} entries", flush=True)
@@ -276,7 +296,7 @@ def main():
             bar.update(len(ids[i:i + 200]), postfix=f"{len(meta)} resolved")
     train_cl = {r["cluster30"] for r in csv.DictReader(open(REPO / "data/processed/manifest.csv"))} if (REPO / "data/processed/manifest.csv").exists() else set()
     args = dict(ranker=a.ranker, net=a.net, esm_tag=a.esm_tag, point_model=a.point_model,
-                receptor_chains=a.receptor_chains)
+                receptor_chains=a.receptor_chains, volume=a.volume, grow_radius=a.grow_radius)
     tasks = [(r, r.get("chain", ""), args) for r in rows]
     with ProcessPoolExecutor(a.jobs) as ex:
         res = list(progress.track(ex.map(one, tasks, chunksize=2), f"predicting on {a.set}", len(tasks), unit="pdb"))
