@@ -13,8 +13,10 @@ import pandas as pd
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts/train"))
+sys.path.insert(0, str(REPO / "scripts/data"))
 from equicave import pockets as pk, structure, tables  # noqa: E402
 from build_native import n_sites  # noqa: E402
+from build_manifest import EXCLUDE  # noqa: E402
 
 ENV = dict(os.environ, JAVA_TOOL_OPTIONS=os.environ.get("JAVA_TOOL_OPTIONS", ""))
 
@@ -41,7 +43,10 @@ def run_fpocket(exe: str, prot: pathlib.Path, work: pathlib.Path) -> list[dict]:
 
 
 def run_p2rank_batch(exe: str, prots: list[pathlib.Path], work: pathlib.Path, threads: int) -> dict[str, list[dict]]:
-    ds = work / "all.ds"; ds.write_text("HEADER: protein\n\n" + "".join(f"{p}\n" for p in prots))
+    # P2Rank resolves a dataset's protein paths relative to the dataset file, so a relative path here becomes
+    # <work>/<relative path> and every structure is reported missing. Absolute paths are the only safe form.
+    ds = work / "all.ds"
+    ds.write_text("HEADER: protein\n\n" + "".join(f"{p.resolve()}\n" for p in prots))
     r = subprocess.run([exe, "predict", str(ds), "-o", str(work / "out"), "-threads", str(threads)], capture_output=True, text=True, env=ENV)
     if r.returncode:
         sys.exit("P2Rank failed:\n" + (r.stderr or r.stdout)[-2000:])
@@ -59,7 +64,14 @@ def run_p2rank_batch(exe: str, prots: list[pathlib.Path], work: pathlib.Path, th
 
 
 def label(rows, pdb, raw, codes, meta):
-    ligs = [l for l in structure.read_ligands(raw, min_heavy=8) if l["comp"] in codes]
+    # `eval_set_to_manifest.py` writes the code "ANY" for a benchmark that names no specific ligands, and the rule
+    # has to be the one `evaluate.py` and the deep-learning drivers use or the methods are scored against different
+    # labels: named codes are taken as given with no exclusion list, and an unnamed set takes every ligand group
+    # except the manifest's EXCLUDE list. Treating "ANY" as a literal code matched nothing, so a set like LIGYSIS
+    # produced no rows at all rather than a wrong number -- silent, and the table simply would not appear.
+    named = codes - {"ANY"} if codes else set()
+    ligs = [l for l in structure.read_ligands(raw, min_heavy=8, exclude=set() if named else EXCLUDE)
+            if (not named or l["comp"] in named)]
     if not ligs:
         return []
     copies = [l["xyz"] for l in ligs]; L = np.vstack(copies); ns = n_sites(copies)
