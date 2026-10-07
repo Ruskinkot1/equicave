@@ -52,6 +52,11 @@ CFG=${CFG:-training/configs/pockets_net.yaml}
 CACHE_ROOT=${CACHE_ROOT:-data/cache}
 HOURS_PER_RUN=${HOURS_PER_RUN:-3.5}
 DRY_RUN=${DRY_RUN:-0}
+# Extra --set overrides applied to every arm. The shortened warmup goes here: measured on the first full run,
+# site top-1 is 0.724 at epoch 1 and 0.022 at epoch 14 because stage 1 holds the centre loss at zero and lets the
+# head drift, while occ_ap reaches 0.760 by epoch 6 against 0.796 at 14. Six warmup epochs buy most of the dense
+# heads' convergence and stop the centre head being degraded first. Unset EXTRA for the original schedule.
+EXTRA=${EXTRA:-${WARM:---set stages.warmup_epochs=6 --set optim.epochs=30}}
 PY=${PY:-python3}
 export PYTHONPATH=src:.
 
@@ -73,7 +78,13 @@ GROUPS = {
 }
 known = set(cfg)
 if arms_arg.strip():
-    arms = [a for a in arms_arg.split() if a == "full" or a in known]
+    want = arms_arg.split()
+    arms = [a for a in want if a == "full" or a in known]
+    # Every arm is a difference against `full`, so the baseline is added whether or not it was asked for. A grid
+    # of arms with no baseline in the same run produces numbers that can only be compared with a previous run --
+    # a different checkout, a different schedule, a different seed set.
+    if "full" not in arms:
+        arms = ["full"] + arms
     missing = [a for a in arms_arg.split() if a not in arms]
     if missing:
         sys.exit(f"unknown arm(s): {' '.join(missing)}; see training/configs/ablations.yaml")
@@ -108,7 +119,7 @@ while read -r arm cache; do
       skip_n=$((skip_n + 1)); continue
     fi
     printf "\n=== %s seed %s fold %s (cache %s) %s\n" "$arm" "$s" "$FOLD" "$cache" "$(date -u +%H:%M:%S)"
-    if $PY -m training pockets-net --config "$CFG" --out "$OUT" --device "$DEVICE" \
+    if $PY -m training pockets-net --config "$CFG" --out "$OUT" --device "$DEVICE" $EXTRA \
          --set "ablation=$arm" "split.val_fold=$FOLD" "optim.seed=$s" "tag=$arm" "data.cache_dir=\"$cache\""; then
       done_n=$((done_n + 1))
     else
