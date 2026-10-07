@@ -285,6 +285,37 @@ diagnosis is a prediction the `no_site_decoder` ablation tests, not a new experi
 
 Numbers and the structure lists: `rank1_residual_coach420.json`.
 
+### Depth and symmetry are both answered, and neither is the lever (2026-10-07)
+
+Two questions kept coming back -- make the network deeper, or change the symmetry group -- and both now have an
+answer from measurement rather than taste.
+
+**Symmetry.** Our own ablation already contains three independent nulls: degree-2 tensors -0.006, chirality +0.000,
+ESM-2 650M -0.010, against a seed sd of 0.009. Raising `lmax` optimises a branch that does no work; dropping to
+O(3) removes a term that costs nothing; translations are already handled, since every message is built from the
+relative vector. GDEGAN (Wang et al., arXiv 2603.19817, 2026) reaches the same place from the other side: its
+Proposition 3.1 states that E(3) breaks to SE(3) the moment a language model's embeddings enter as invariant node
+features, because they do not encode chirality. Ours do. The SO(2)-reduced convolutions of eSCN and EquiformerV2
+are a way to make a *high* `lmax` affordable, so they are a speed technique for the thing we measured as useless.
+
+**Depth.** Our model is `dim 128, layers 5`, 4.54 M parameters, of which 83.3 % sit in the five attention layers
+(0.76 M each), 7.3 % in the site decoder and 4.9 % in the input projections. The comparable published models are
+smaller: EquiPocket 1.70 M, GDEGAN 1.90 M, GotenNet 2.20 M. GDEGAN's Figure 4a sweeps depth directly and reports
+the peak at **four** layers with degradation beyond it, attributed to oversmoothing. We are already past that
+optimum on both counts, which is why `small` (96 x 4, 2.18 M, 0.48x) is the capacity arm worth running first: if it
+ties, every later experiment costs half, and that buys more experiments than depth buys accuracy.
+
+**What is a lever** is the shape of the attention score. GDEGAN's own ablation isolates it: replacing the
+dot-product logit with a Gaussian kernel on variance-normalised feature differences is worth +3.3 % DCC and +3.3 %
+DCA on a GotenNet backbone of our family, for `layers x heads` parameters instead of O(dim^2). It is implemented
+here as `model.attn_kernel: gaussian` with arms `gaussian_attn` and `gaussian_attn_4`; it reads only the invariant
+stream, and `tests/test_model.py` asserts the model stays exactly SO(3)-equivariant with it on.
+
+**Their absolute numbers are not comparable with ours** and are quoted only for the effects inside their own
+table. P2Rank scores DCA 0.628 on COACH420 under their protocol (EquiPocket's benchmark settings, mean-shift
+clustering over high-scoring residues) against 0.759 under ours, so their GDEGAN 0.707 must not be set beside our
+0.706. What transfers is the relative ablation, not the row.
+
 ## Which modern methods can actually be run (checked 2026-10-05, primary sources)
 
 The comparison was against fpocket (2009) and P2Rank (2018) only. Of the deep-learning methods, most cannot be run
