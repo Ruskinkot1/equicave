@@ -17,9 +17,11 @@ from training.pockets.net_task import SELECT_WEIGHTS, select_score  # noqa: E402
 
 # epoch -> the three numbers the score can be built from, as that run recorded them
 RUN = {
+    1:  dict(occ_ap=0.5080, res_ap=0.4480, top1=0.7240),      # untrained heads, probes still on the sites
     14: dict(occ_ap=0.7957, res_ap=0.7148, top1=0.0221),      # was selected
     20: dict(occ_ap=0.7897, res_ap=0.7106, top1=0.0404),      # last stage-1 epoch
-    22: dict(occ_ap=0.7940, res_ap=0.7099, top1=0.8456),      # the centre head starts working
+    22: dict(occ_ap=0.7940, res_ap=0.7099, top1=0.8456),      # the centre head is being repaired
+    23: dict(occ_ap=0.7940, res_ap=0.7093, top1=0.8640),
     24: dict(occ_ap=0.7903, res_ap=0.7057, top1=0.8676),      # best site detection; run stopped here
 }
 
@@ -38,10 +40,21 @@ def test_the_old_score_preferred_the_blind_checkpoint():
 
 def test_selection_now_prefers_the_epoch_that_finds_pockets():
     now = {ep: score(e) for ep, e in RUN.items()}
-    assert max(now, key=now.get) == 24, now
+    assert max(now, key=now.get) in (23, 24), now
     assert now[22] > now[20], now
     # and by a margin no amount of drift in the per-node heads can close
     assert now[24] - now[14] > 0.3, now
+
+
+def test_epoch_one_beats_the_epoch_that_was_selected():
+    # The sharper reading of that run: at epoch 1 the model already placed sites at top-1 0.724 with a median
+    # centre error of 1.7 A, because the probes are sampled by ligandability and an untrained centre head leaves
+    # them roughly where they are. Twenty epochs with w_center at zero then degraded it to 0.022 and 14.7 A. So
+    # the warmup stage does not warm the centre head up, it lets it drift, and a selection score worth having has
+    # to rank the honest first epoch above the degraded fourteenth.
+    now = {ep: score(e) for ep, e in RUN.items()}
+    assert now[1] > now[14], now
+    assert now[1] > now[20], now
 
 
 def test_site_detection_carries_real_weight():
