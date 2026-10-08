@@ -440,6 +440,43 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**The column budget was the wrong explanation, and the retry at 3.2x the data settles it** (measured 2026-10-08
+on the full 1367 structures and 40 986 candidates, 5-fold cluster CV, 4 seeds). The sentence above named a
+specific cause -- too few rows for too many columns -- so the retry swept the budget the cause points at, with the
+second stage choosing 20 or 40 columns by gain inside each training fold, over the top 3 and the top 5:
+
+| method | top-1 | top-N | top-(N+2) |
+|---|---|---|---|
+| one stage, LambdaRank over 204 features | **0.792 [0.770, 0.814]** | 0.833 [0.812, 0.853] | 0.903 [0.886, 0.920] |
+| cascade over the top 3, all columns | 0.781 [0.757, 0.806] | 0.826 | 0.906 |
+| cascade over the top 3, 20 columns | 0.785 [0.761, 0.808] | 0.824 | 0.906 |
+| cascade over the top 3, 40 columns | 0.781 [0.758, 0.805] | 0.825 | 0.906 |
+| cascade over the top 5, all columns | 0.783 [0.760, 0.806] | 0.827 | 0.902 |
+| cascade over the top 5, 20 columns | 0.786 [0.763, 0.810] | 0.830 | 0.901 |
+| cascade over the top 5, 40 columns | 0.775 [0.752, 0.799] | 0.822 | 0.901 |
+
+Every configuration is below the single stage at top-1. The budget does act in the predicted direction *inside* the
+cascade -- 20 columns beats all 204 at both depths -- and it does not come close to recovering the single stage, so
+the row-to-column ratio was a real but minor part of the story and the stated cause is retired. At 3.2x the rows
+of the first attempt the deficit is 0.006 to 0.017 instead of 0.025 to 0.030, which also makes "retry when the
+data is larger" a weaker promise than it looked.
+
+What stands instead, and it reconciles the result with the literature rather than contradicting it: the published
+cascade gain (+7 to +14 Top-n for PRANK over fpocket, three independent confirmations) is a gain from replacing a
+**geometric** first stage with a learned second one, over a candidate list whose own ceiling is 80.78 % on
+COACH420. Our first stage is already a learned ranker at 0.792 top-1 over a list with a ceiling of 0.977. A second
+model over the top 3 of that has almost nothing left to fix and can only discard the first stage's ordering. The
+intervention is "geometry to learned", not "learned to learned twice", and we are already on the far side of it.
+
+**An isotonic calibration's apparent ranking gain is a tie-breaking artefact** (same run). The calibrated
+seed-ensemble row reads top-1 0.792 against 0.792 and top-(N+2) 0.910 against 0.903, and the top-1 identity is the
+giveaway: isotonic regression is monotone, so it cannot reorder a structure's candidates and cannot change any
+top-k. What it can do is make previously distinct scores **equal**, because it is a step function -- and the
+stable sort behind `per_structure` then breaks those ties by the detector's own order, which is informative
+(native order alone is 0.523 top-1). So the +0.007 is an accidental ensemble of the calibrated score with the
+detector ordering, not better ranking. Worth keeping because the natural reading of that row is the wrong one,
+and because the ECE it does buy is real (0.0093 to 0.0021) and belongs to the probability, not to the ranking.
+
 **The probe-placement ablation was weighted for the wrong arm** (measured and fixed 2026-10-06). The occupancy
 loss carries a positive-class weight, and the plan said to retune it "once placement is settled" because learned
 placement was expected to raise the positive rate. Measured directly on 19 structures at the shipped settings:
