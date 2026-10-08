@@ -105,11 +105,12 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
     if net_model is not None:
         import torch
         from training.pockets import data as D, net_task as NT
-        d = D.featurize(pdb_path, None, None, net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"])
+        fkw = D.featurisation_kwargs(net_cfg["data"], point_model=point_model, log=print)
+        d = D.featurize(pdb_path, None, None, net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"], **fkw)
         if d is not None and net_cfg["data"].get("esm"):
             from training.pockets.esm_embed import Embedder, cached
             rt = structure.residue_table(st)
-            d = D.featurize(pdb_path, None, cached(Embedder(net_cfg["data"]["esm"]), pathlib.Path(pdb_path).stem, rt["seq"], rt["chain"], REPO / "data/cache/esm"), net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"])
+            d = D.featurize(pdb_path, None, cached(Embedder(net_cfg["data"]["esm"]), pathlib.Path(pdb_path).stem, rt["seq"], rt["chain"], REPO / "data/cache/esm"), net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"], **fkw)
         if d is not None:
             with torch.no_grad():
                 out = net_model(D.to_torch(d))
@@ -266,6 +267,12 @@ def main():
     ap.add_argument("--set", required=True); ap.add_argument("--ranker", default=""); ap.add_argument("--net", default="")
     ap.add_argument("--external", default=""); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--no-similarity-filter", action="store_true"); ap.add_argument("--out", default=str(REPO / "docs/results"))
+    ap.add_argument("--novel-corpus", dest="novel_corpus", default=str(REPO / "data/processed/homology_corpus_clusters.json"),
+                    help="30 %% clusters of every X-ray protein-ligand complex deposited before the scPDB 2017 "
+                         "release, as written by scripts/eval/homology_control.py. Structures in those clusters "
+                         "are homologous to what the scPDB-trained competitors saw, so the 'novel to all' subset "
+                         "drops them as well as our own training clusters. Absent file: the subset is skipped "
+                         "with a note rather than silently reported as empty.")
     ap.add_argument("--ligand-rule", choices=["mlig", "all"], default="mlig")
     ap.add_argument("--receptor-chains", choices=["all", "entry"], default="all",
                     help="all (default): the whole assembly, as the candidate table was built and as the external "
@@ -305,12 +312,30 @@ def main():
         sys.exit("no predictions")
     cand["cluster30"] = cand["pdb"].map(lambda p: (meta.get(p, {}).get("cluster30") or [p])[0])
     cand["train_similar"] = cand["pdb"].map(lambda p: bool(set(meta.get(p, {}).get("cluster30", [])) & train_cl))
+    # Hard novelty: homologous to neither our training clusters nor the pre-2017 ligand-bound superset the
+    # scPDB-trained competitors were drawn from. The superset over-removes and never under-removes, which is the
+    # conservative direction -- it shrinks the subset rather than flattering anyone, ourselves included.
+    corpus_f = pathlib.Path(a.novel_corpus)
+    their_cl = set(json.loads(corpus_f.read_text())["clusters"]) if corpus_f.exists() else set()
+    cand["their_similar"] = (cand["pdb"].map(lambda p: bool(set(meta.get(p, {}).get("cluster30", [])) & their_cl))
+                             if their_cl else False)
+    if not their_cl:
+        print(f"  no novelty corpus at {corpus_f}: the 'novel to all' subset is skipped "
+              f"(run scripts/eval/homology_control.py to build it)")
     methods = [c for c in ("native order", "ranker", "ranker+net", "network only") if c in cand]
     results = {}
-    for subset, df in (("all", cand), ("not train-similar", cand[~cand.train_similar]), ("train-similar", cand[cand.train_similar])):
+    subsets = [("all", cand), ("not train-similar", cand[~cand.train_similar]),
+               ("train-similar", cand[cand.train_similar])]
+    if their_cl:
+        subsets.append(("novel to all", cand[~cand.train_similar & ~cand.their_similar]))
+    for subset, df in subsets:
         if df.empty or (a.no_similarity_filter and subset != "all"):
             continue
         results[subset] = {}
+        # Composition, next to the accuracy, because filtering by homology also changes *which* structures are
+        # left and a site-count shift alone moves top-1: an earlier version of this analysis read a closing gap
+        # as leakage when it was composition. Reported per subset so the confound is visible without being asked.
+        results[subset]["_composition"] = M.composition(df)
         per_ref = None
         crits = dict(DCA="label", DCC4="label_dcc", DCC10="label_dcc10", DCC12="label_dcc12")
         radii = [float(x) for x in a.merge_radii.split(",") if x.strip()]

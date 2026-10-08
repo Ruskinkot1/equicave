@@ -81,6 +81,7 @@ GROUPS = {
     "inputs":       ["probe_protrusion", "no_probe_potential", "probe_metal", "probe_electrostatic"],
     # The two levers with evidence, together and apart. Run this group first: it decides what `full` should be.
     "baseline":     ["full_next", "noise_aug", "probe_protrusion"],
+    "architecture": ["no_edge_type", "het_mp", "gaussian_attn", "site_agg_mean", "site_agg_max"],
     "capacity":     ["small", "deep", "wide", "big"],
     "scale":        ["scale_max", "scale_max_big"],
 }

@@ -84,6 +84,15 @@ model:
   # Three accurate methods, three rules, no published comparison -- in every one of them it is a hyperparameter
   # rather than an ablation. The default is P2Rank's, being the rule the strongest ranker uses.
   site_agg: sum_sq           # sum_sq | mean | max | sum
+  # One learned gain per edge type -- per ordered (source, destination) pair of node types -- per stream, so a
+  # residue does not send a probe the same message it sends a residue. Indexed by the pair and not the
+  # destination on purpose: a destination-only gain factors out of the attention-weighted sum and would be a
+  # per-type scaling of the node update instead of a message function. The gains are invariant scalars, so
+  # equivariance is unchanged, and they are zero-initialised, so the model starts out identical to this one.
+  het_mp: false
+  # The nine edge types in the edge MLP. `no_edge_type` is the removal that asks whether type awareness matters at
+  # all -- the more informative half of the pair, since `het_mp` adds a mechanism the edge MLP may already carry.
+  use_edge_type: true
 eval:
   # Post-hoc temperature scaling of the occupancy head. Reported two ways: what one scalar does to the head's ECE,
   # and -- the number that does not exist in this literature -- what it does to a sum-of-squares site ranking.

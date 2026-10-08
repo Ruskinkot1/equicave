@@ -20,6 +20,7 @@ Where an idea comes from a publication, it is listed below with the form in whic
 | hotspot field | per-point ligand-atom type probability (pharmacophore-style maps) | fragment hotspot maps (Radoux 2016), FTMap-type methods | focal BCE over 7 CCD-derived atom classes on cavity lattice points, labelled from crystal ligand atoms within 1.5 Å |
 | top-(N+2) and the ligand rule | evaluation convention for pocket detection | P2Rank (Krivák 2018), DeepPocket (Aggarwal 2021) | implemented in `metrics.per_structure`; the `_mlig` lists are fetched, not redistributed |
 | hybrid ranking | a learned re-ranker over candidates beats end-to-end detection | LIGYSIS comparison (Utgés & Barton 2024) | LightGBM LambdaRank over our own features, cluster CV, paired cluster bootstrap |
+| heterogeneous message passing (`GeoTensorAttention`, `het_mp`) | separate message functions per node-type pair in a graph with virtual nodes | **VN-EGNN** (Sestak 2024/2025): separate transforms for its virtual nodes, worth +0.02 to +0.05 DCC in its own ablation and null-to-harmful on 3 of 6 metrics without rich protein features | ours is one invariant gain per edge type per stream, zero-initialised, multiplying the existing message rather than replacing the function. Indexed by the ordered pair and not the destination, because a destination-only gain factors out of the attention-weighted sum and would be a per-type scaling of the node update rather than a message function -- a test checks that arithmetic. Their virtual nodes sit on a sphere around the protein; ours are cavity lattice points, so the analogy covers the mechanism and not the construction |
 | per-probe conservation (`pocket_features.point_conservation`) | per-residue MSA conservation as a pocket-ranking feature | **P2Rank_CONS** (Krivák & Hoksza), whose shipped conservation-enabled model reaches top-(N+2) 53.9 % against 51.9 % on LIGYSIS; PRANK (2015) deliberately excludes it, so the choice is contested in the same lineage | ours is per cavity probe rather than per candidate: 1/r-weighted mean over the lining atoms, the maximum, and the *coverage* of the lining by the alignment, so a thinly aligned pocket is not read as an unconserved one. The scores themselves are read from a file in P2Rank's own two-column format; we compute no alignment and ship none |
 | metal channels (`pocket_features.point_metal`, `structure.read_metals`) | a metal ion as a model input at all | **DeepSite** (Jiménez 2017) has a `metallic` grid channel; **Kalasanty** (Stepniewska-Dziubinska 2020) and **DeepSurf** (Mylonas 2021) inherit a `metal` bit from Pafnucy's 18 atom features. None of the three ablates it, and DeepPocket and GrASP strip heteroatoms instead | per probe, per chemical role (transition / alkaline earth / alkali): distance to the nearest ion and an **occupancy-weighted** count. The grouping, the occupancy weighting and the per-probe form are ours. The weighting is motivated by **Metal3D**'s (Dürr 2023) estimate that about a third of PDB zinc sites are crystallisation artefacts, so a presence bit would assert more than the file supports |
 | screened-Coulomb channels (`pocket_features.point_field`, `formal_charges`) | electrostatics as a network input without a solver | **dMaSIF** (Sverrisson, CVPR 2021) removed MaSIF's Poisson–Boltzmann solve, replaced it with a learned function of atom types and inverse distances, and *gained* accuracy (0.85 → 0.87 on the same interface split) at ~1/1000 of the preprocessing cost. What we take from that is the negative claim: a solver is not worth paying for here | our term is neither theirs nor a PB solve: formal charges spread over the atoms of each ionised group, a Debye–Hückel screened Coulomb sum (λ = 7.8 Å), the potential and ‖E‖ as scalars and **E itself as a degree-1 channel**. No force-field parameter file is read, so no force-field licence applies. We found no published comparison of a cheap Coulomb field against a PB solve as a network input for any of the three tasks, which is why the arm exists |
@@ -61,3 +62,34 @@ Where an idea comes from a publication, it is listed below with the form in whic
 - The Debye–Hückel screening length (7.8 Å at 150 mM monovalent salt, 298 K) and the formal charges of Arg, Lys,
   Asp and Glu are textbook, taken from no paper in particular [из памяти]. Nothing here uses Amber, CHARMM,
   Gasteiger or AM1-BCC parameters, so the charge set carries no third-party licence.
+
+## Architecture audit, 2026-10-08
+
+Reviewed under `.claude/skills/equivariant-gnn-researcher` after the chemistry additions. Four findings, all acted
+on in the same session:
+
+- **A leakage path in the metal channel [исправлено].** `read_metals` read every HETATM metal, and on the
+  benchmarks where ions are a large share of the sites -- about 40 % of LIGYSIS ligand sites -- such an atom can be
+  the very thing the prediction is scored against. `exclude_comps` now removes the ligand codes being predicted,
+  the featuriser passes them, and a test pins it. Our own manifest requires eight heavy atoms per ligand, so a
+  monatomic ion was never one of *our* labels; the featuriser is also what runs on the external sets, where it was.
+- **The featurisation did not reach inference [исправлено].** `predict.py`, `scripts/eval/evaluate.py` and the MCP
+  server each passed `n_probe`, `n_surf` and `k_scale` and nothing else, so a checkpoint trained with any other
+  featurisation was fed different arrays than it was trained on. For the width-changing flags that is a loud shape
+  error. For `probe_sampling` it was silent and much worse: training placed probes by predicted ligandability
+  while inference placed them at random within buriedness tiers, in the one component the ablation values at
+  0.263 of site top-1. `data.featurisation_kwargs` is now the single carrier, a test asserts every width-changing
+  flag is in it, and a config asking for learned placement with no point model supplied says so instead of falling
+  back quietly.
+- **`het_mp` was not heterogeneous message passing [исправлено].** The first version indexed its gain by the
+  destination node type, which factors straight out of the attention-weighted sum, so VN-EGNN's number could not
+  be attached to it. Now indexed by edge type. The caveat is recorded in the arm itself: the edge MLP already
+  consumes a 16-dimensional embedding of the same nine types, so this may be another redundancy null, which is
+  why `no_edge_type` -- the removal that asks whether type awareness matters at all -- was added beside it.
+- **One confound left in place deliberately [принято].** `vec0` channel 2 carries Cα→Cβ for residues, zeros for
+  surface points and, with `probe_electrostatic` on, the screened-Coulomb field for probes, and `vec_in` is shared
+  across node types. So the field competes for the same projection weights as a backbone direction. This predates
+  the change -- channel 0 is already N→Cα for residues and the direction to the nearest atom for probes -- and
+  giving probes their own vector projection is a larger change than the arm it would serve. Recorded here so the
+  arm is not read as a clean test of "electrostatics as a degree-1 input"; it is a test of that input *through a
+  shared projection*.

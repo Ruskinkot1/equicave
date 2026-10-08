@@ -64,7 +64,8 @@ def pocket_properties(pdb_path: str, center: list[float], model: str | None = No
         import torch
         from training.pockets import data as D
         net, cfg = _net(model)
-        d = D.featurize(pdb_path, None, None, cfg["data"]["n_probe"], cfg["data"]["n_surf"])
+        d = D.featurize(pdb_path, None, None, cfg["data"]["n_probe"], cfg["data"]["n_surf"],
+                        **D.featurisation_kwargs(cfg["data"]))
         b = D.to_torch(d)
         ppos = d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]]
         b["site_probe_mask"] = torch.tensor((np.linalg.norm(ppos - c, axis=1) <= 8.0)[None].astype(np.float32))
@@ -88,7 +89,8 @@ def hotspot_field(pdb_path: str, center: list[float], model: str | None = None, 
         import torch
         from training.pockets import data as D
         net, cfg = _net(model)
-        d = D.featurize(pdb_path, None, None, cfg["data"]["n_probe"], cfg["data"]["n_surf"])
+        d = D.featurize(pdb_path, None, None, cfg["data"]["n_probe"], cfg["data"]["n_surf"],
+                        **D.featurisation_kwargs(cfg["data"]))
         with torch.no_grad():
             out = net(D.to_torch(d))
         ppos = d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]]

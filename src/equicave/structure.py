@@ -209,8 +209,14 @@ def receptor_chains(path, receptor_min_res: int = 50, model: int = 1) -> str:
 METAL_ELEMENTS = frozenset("ZN MG CA FE MN CU NA K CO NI CD HG MO W V SR BA PT AU AG LI".split())
 
 
-def read_metals(path, model: int = 1, min_occupancy: float = 0.0) -> dict:
+def read_metals(path, model: int = 1, min_occupancy: float = 0.0, exclude_comps: set | None = None) -> dict:
     """Metal atoms of one model, from any HETATM group: xyz, element, occupancy, comp.
+
+    `exclude_comps` is not a convenience. On the benchmarks where ions are a large share of the sites -- about 40 %
+    of LIGYSIS ligand sites -- a metal read from the file can be the very atom the prediction is scored against, so
+    an unfiltered metal channel points at the label. The datasets disagree with each other about this too: sc-PDB
+    puts cofactors and ions on the *protein* side while COACH420 and HOLO4K put them on the *ligand* side, so the
+    same HEM is context in training and a target in testing. Every caller that has a ligand set must pass it.
 
     Read separately from the polymer because a metal is not a protein atom -- it has no residue, no atom name worth
     typing and no backbone -- and because its occupancy is the only cheap confidence available that the site is real.
@@ -219,6 +225,7 @@ def read_metals(path, model: int = 1, min_occupancy: float = 0.0) -> dict:
     iron of a haem is an element FE atom in a HEM group), since to a cavity they are chemistry like any other.
     """
     xyz, el, occ, comp = [], [], [], []
+    exclude = {str(c).upper() for c in (exclude_comps or ())}
     cur_model = 1
     for line in Path(path).read_text(errors="ignore").splitlines():
         tag = line[:6]
@@ -232,6 +239,8 @@ def read_metals(path, model: int = 1, min_occupancy: float = 0.0) -> dict:
             continue
         e = _element(line)
         if e.upper() not in METAL_ELEMENTS:
+            continue
+        if line[17:20].strip().upper() in exclude:
             continue
         try:
             o = float(line[54:60])

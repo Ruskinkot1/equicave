@@ -31,6 +31,14 @@ ionisable-group distances and counts are already in `probe_potential`, so this i
 `probe_chemistry` no more than the better of its two halves; `probe_conservation` **not run** — it needs an
 alignment per target and nothing in this repository produces one.
 
+Predictions for the architecture arms added the same day, also before any ran: `no_edge_type` **−0.00 to −0.03**
+(a removal, so a drop is the expected direction; a null would say the nine edge types are decoration, which would
+be worth more than a small confirmation); `het_mp` **0.000 ± 0.01, predicted null for the same reason** -- the
+edge MLP already embeds those nine types, so this adds a mechanism it may already carry; the three `site_agg`
+arms **within ±0.02 of each other**, with `max` the likeliest to lose, on the reasoning that it discards how
+large a site's agreement is. The aggregator comparison is run because three accurate methods use three different
+rules and none of them ablated it, not because we expect a winner.
+
 One prediction about the calibration block, which is a measurement rather than an arm: the sum-of-squares site
 ranking **will move** under temperature scaling, because that aggregate is not monotone-invariant, and the sign
 is genuinely unknown. No paper in this literature calibrates pocket scores and reports the effect on ranked

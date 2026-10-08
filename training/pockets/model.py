@@ -118,7 +118,8 @@ class GeoTensorAttention(nn.Module):
     """One message-passing layer with attention over invariants and gated degree-0/1/2 messages."""
     def __init__(self, dim: int, heads: int = 4, n_rbf: int = 32, cutoff: float = 10.0, n_edge_types: int = 9,
                  use_vectors: bool = True, use_tensors: bool = True, chiral: bool = True, dropout: float = 0.0,
-                 n_edge_scalar: int = 0, attn_kernel: str = "dot"):
+                 n_edge_scalar: int = 0, attn_kernel: str = "dot", het_types: int = 0,
+                 use_edge_type: bool = True):
         super().__init__()
         assert dim % heads == 0
         assert attn_kernel in ("dot", "gaussian")
@@ -130,7 +131,37 @@ class GeoTensorAttention(nn.Module):
             # differences; heads then specialise on their own.
             self.xi = nn.Parameter(torch.full((heads,), 0.5413))
         self.n_edge_scalar = n_edge_scalar
+        # Heterogeneous message passing: one gain per **edge type** -- per ordered (source, destination) pair of
+        # node types -- per stream. VN-EGNN's ablation puts separate transforms for its virtual nodes at +0.02 to
+        # +0.05 DCC on COACH420/HOLO4K/PDBbind and says the gain depends on the protein nodes already carrying
+        # rich features; ours do.
+        #
+        # The index is the edge type and not the destination type, and that is not cosmetic. A gain that depends
+        # only on the destination factors straight out of the attention-weighted sum -- every edge into a node
+        # shares its destination -- so it would be a per-type scaling of the node *update*, not a message
+        # function, and VN-EGNN's number could not be attached to it. Indexed by the pair it does not factor out:
+        # a residue sends one thing to a probe and another to a residue.
+        #
+        # The honest caveat, recorded before the arm runs: the edge MLP already consumes a 16-dimensional
+        # embedding of the same nine edge types, and that MLP produces every gate and attention logit here. So
+        # this mechanism is present in a learned form already and the arm is at genuine risk of being another
+        # redundancy null -- which is why `no_edge_type`, the *removal* that asks whether type awareness matters
+        # at all, is the more informative half of the pair.
+        #
+        # The gains are invariant scalars multiplying each stream, so equivariance is untouched -- a scalar times a
+        # degree-1 or degree-2 quantity is still that degree. Zero-initialised, so with `het_mp` on the layer
+        # starts out bit-for-bit the one it replaces and the arm measures what the gains learn rather than an
+        # initialisation difference. Cost is `het_types * dim` per stream per layer: about 17 k parameters on the
+        # shipped model against 23 % of it for the tensor channels.
+        self.het_types = het_types
+        if het_types:
+            self.het_x = nn.Parameter(torch.zeros(het_types, dim))
+            if use_vectors:
+                self.het_v = nn.Parameter(torch.zeros(het_types, dim))
+            if self.use_tensors:
+                self.het_t = nn.Parameter(torch.zeros(het_types, dim))
         self.rbf = RBF(n_rbf, cutoff)
+        self.use_edge_type = use_edge_type
         self.etype = nn.Embedding(n_edge_types, 16)
         n_inv = 2 * dim + n_rbf + 16 + n_edge_scalar + (2 * dim if use_vectors else 0) + (2 * dim if self.use_tensors else 0)
         self.n_gates = 3 + (3 if use_vectors else 0) + (3 if self.use_tensors else 0)
@@ -174,6 +205,7 @@ class GeoTensorAttention(nn.Module):
 
     def forward(self, x, V, T, pos, edge_index, edge_type, edge_scalar=None):
         src, dst = edge_index                  # message j=src -> i=dst
+        het = bool(self.het_types)
         n, F, H = x.shape[0], self.dim, self.heads
         # Mixed precision: the residual stream `x` carries the working dtype. Under autocast a Linear returns bf16
         # while a softmax runs in float32 and a coordinate difference stays float32, so a product of the two
@@ -185,7 +217,9 @@ class GeoTensorAttention(nn.Module):
         r = (pos[dst] - pos[src]).to(dt)
         d = r.norm(dim=1).clamp(min=1e-6)
         u = r / d[:, None]
-        inv = [x[dst], x[src], self.rbf(d), self.etype(edge_type).to(dt)]
+        et_emb = self.etype(edge_type).to(dt) if self.use_edge_type else \
+            torch.zeros(len(src), 16, device=x.device, dtype=dt)     # `no_edge_type`: the width stays, the signal goes
+        inv = [x[dst], x[src], self.rbf(d), et_emb]
         if self.n_edge_scalar:
             inv.append(edge_scalar if edge_scalar is not None else torch.zeros(len(src), self.n_edge_scalar, device=x.device, dtype=x.dtype))
         if self.use_vectors:
@@ -213,6 +247,8 @@ class GeoTensorAttention(nn.Module):
             m_x = m_x + next(g) * utu
         else:
             next(g)
+        if het:
+            m_x = m_x * (1.0 + self.het_x[edge_type].to(dt))
         dx = add_into(torch.zeros_like(x), dst, a * m_x)
         dV = dT = None
         if self.use_vectors:
@@ -222,11 +258,15 @@ class GeoTensorAttention(nn.Module):
                 m_v = m_v + next(g)[..., None] * Tu
             else:
                 next(g)
+            if het:
+                m_v = m_v * (1.0 + self.het_v[edge_type].to(dt))[..., None]
             dV = add_into(torch.zeros_like(V), dst, a[..., None] * m_v)
         if self.use_tensors:
             Wt = torch.einsum("efij,fg->egij", Tj, self.wt.weight.t())
             uu = (u[:, :, None] * u[:, None, :] - EYE.to(u) / 3.0)[:, None]  # [E, 1, 3, 3]
             m_t = next(g)[..., None, None] * Wt + next(g)[..., None, None] * uu + next(g)[..., None, None] * sym_traceless(Vj, u[:, None, :].expand_as(Vj))
+            if het:
+                m_t = m_t * (1.0 + self.het_t[edge_type].to(dt))[..., None, None]
             dT = add_into(torch.zeros_like(T), dst, a[..., None, None] * m_t)
         x = x + self.drop(dx).to(x.dtype)
         if dV is not None:
@@ -401,7 +441,7 @@ class EquiCaveNet(nn.Module):
                  invariant_mode: str = "frames", site_decoder: bool = True, site_layers: int = 2,
                  n_site_tokens: int = 32, site_nms: float = 6.0, site_membership: float = 8.0,
                  probe_update: str = "center", flow_step: float = 2.0, attn_kernel: str = "dot",
-                 site_agg: str = "sum_sq", **_ignored):
+                 site_agg: str = "sum_sq", het_mp: bool = False, use_edge_type: bool = True, **_ignored):
         super().__init__()
         self.dim, self.equivariant = dim, equivariant
         self.recycles, self.n_edge_scalar = recycles, n_edge_scalar
@@ -416,8 +456,11 @@ class EquiCaveNet(nn.Module):
                                     for k, v in in_dims.items()})
         self.type_emb = nn.Embedding(3, dim)
         self.vec_in = nn.Linear(n_init_vec, dim, bias=False)
+        self.het_mp = bool(het_mp)
         self.layers = nn.ModuleList([GeoTensorAttention(dim, heads, n_rbf, cutoff, 9, self.use_vectors, self.use_tensors, chiral,
-                                                        dropout, n_edge_scalar, attn_kernel) for _ in range(layers)])
+                                                        dropout, n_edge_scalar, attn_kernel,
+                                                        het_types=9 if het_mp else 0,
+                                                        use_edge_type=use_edge_type) for _ in range(layers)])
         self.head_res = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
         self.head_occ = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
         self.head_conf = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))

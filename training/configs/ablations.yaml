@@ -71,6 +71,20 @@ ablations:
   # docs/results/PREREGISTERED.md: clear +0.02 over `full` on three seeds and this becomes the baseline, with the
   # grid re-run against it. A bundle cannot say which half won, which is why both single-change arms stay.
   full_next: {optim.augment: {pos: 0.5, feat: 0.3, drop: 0.03}, data.probe_protrusion: true}
+  # Heterogeneous message passing: the third element in this file with a controlled published number behind it
+  # (VN-EGNN, +0.02 to +0.05 DCC for separate virtual-node transforms, and null-to-harmful on 3 of 6 metrics
+  # without rich protein features -- ours are rich, which is the condition their result attaches). About 5.7 k
+  # parameters, zero-initialised, so the arm measures the gains and not an initialisation.
+  het_mp: {model.het_mp: true}
+  no_edge_type: {model.use_edge_type: false}
+  # How a site's member probes collapse into one score. Three accurate methods use three different rules and
+  # nobody has compared them: P2Rank sums the squares of its per-point ligandability and reports that PRANK tested
+  # the mean and rejected it, GrASP and VN-EGNN average, YuelPocket takes the peak. In every one of them it is a
+  # hyperparameter rather than an ablation, so these three arms are the comparison the field is missing. The
+  # default stays P2Rank's rule, being the one the strongest ranker uses.
+  site_agg_mean: {model.site_agg: mean}
+  site_agg_max: {model.site_agg: max}
+  site_agg_sum: {model.site_agg: sum}
   # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
   # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.

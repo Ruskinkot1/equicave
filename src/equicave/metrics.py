@@ -173,3 +173,21 @@ def by_group(rr, groups: dict, score_col: str = "score", label_col: str = "label
         per = per_structure(sub, score_col, label_col=label_col)
         out[name] = dict(n=int(n), **{k: float(per[k].mean()) for k in cols if k in per})
     return out
+
+
+def composition(df, id_col: str = "pdb", site_col: str = "n_sites", cluster_col: str = "cluster30") -> dict:
+    """Who is in a subset, not how well it scored: structure and cluster counts, and the site-count distribution.
+
+    Reported beside every homology-filtered subset because filtering changes *which* structures survive, and the
+    site-count mix alone moves top-1 -- a structure with one site is a different problem from one with five. An
+    earlier version of this analysis read a closing gap between subsets as leakage when it was composition, which
+    is why this is printed without being asked for rather than computed when someone suspects it.
+    """
+    one = df.drop_duplicates(id_col)
+    n = one[site_col] if site_col in one else None
+    return dict(structures=int(one[id_col].nunique()),
+                clusters=int(one[cluster_col].nunique()) if cluster_col in one else None,
+                mean_sites=float(n.mean()) if n is not None and len(n) else None,
+                single_site_fraction=float((n == 1).mean()) if n is not None and len(n) else None,
+                site_counts={int(k): int(v) for k, v in n.value_counts().sort_index().items()}
+                            if n is not None and len(n) else {})

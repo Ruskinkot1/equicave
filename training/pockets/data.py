@@ -204,7 +204,11 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         # of ligand sites in LIGYSIS and no published site predictor ablates its metal channel, so this is new
         # information rather than a re-encoding of something the model already has -- which is the property the
         # ESM-2, surface and degree-2 arms all failed to have.
-        md, mw = pf.point_metal(ppos, structure.read_metals(pdb_path))
+        # `lig_codes` is excluded from the metals: on a set where an ion is itself a site -- about 40 % of LIGYSIS
+        # ligand sites are ions -- an unfiltered channel would read the label. Our own manifest asks for at least
+        # eight heavy atoms per ligand, so a monatomic ion is never one of our labels, but the featuriser is also
+        # what runs on the external benchmarks, where it would be.
+        md, mw = pf.point_metal(ppos, structure.read_metals(pdb_path, exclude_comps=lig_codes))
         feat_probe = np.concatenate([feat_probe, md / 16.0, np.log1p(mw) / 2.0], 1).astype(np.float32)
     if probe_conservation:
         # The one external signal in this literature with a measured effect on train-dissimilar structures
@@ -465,6 +469,38 @@ def drop_nodes(b: dict, keep):
         # Slices index nodes by type; each becomes the surviving members under the new numbering.
         out["slices"] = {k: idx[v[keep[v]]] for k, v in b["slices"].items()}
     return out
+
+
+# Every featurize() argument that changes the arrays, so one function can carry a trained model's featurisation
+# to inference. Keeping this list next to `featurize` rather than at each call site is the point: three inference
+# paths (predict.py, scripts/eval/evaluate.py, the MCP server) each used to pass n_probe, n_surf and k_scale and
+# nothing else, so a model trained with any other setting was fed different features than it was trained on. With
+# the width-changing flags that is a loud shape error; with `probe_sampling` it was silent and much worse -- the
+# probes were placed at random within buriedness tiers at inference while training placed them by predicted
+# ligandability, and the probes are the one component the ablation says is worth 0.263 of site top-1.
+FEATURISE_KEYS = ("k_scale", "require_interaction", "residue_chemistry", "probe_potential", "probe_metal",
+                  "probe_electrostatic", "probe_conservation", "conservation_dir", "probe_protrusion",
+                  "probe_ligandable_frac")
+
+
+def featurisation_kwargs(dcfg: dict, point_model=None, log=None) -> dict:
+    """The featurize() keyword arguments a trained model's own config asks for.
+
+    `point_model` is passed in rather than loaded here, because which booster is correct depends on the caller:
+    out-of-fold evaluation of our own structures needs the fold model that did not see them, an external benchmark
+    can use the full-data one. When the config asks for learned placement and no model is supplied, the fallback is
+    announced instead of taken quietly -- that silence was the bug this function exists to remove.
+    """
+    kw = {k: dcfg[k] for k in FEATURISE_KEYS if k in dcfg}
+    if dcfg.get("probe_sampling", "tiered") == "ligandable":
+        if point_model is not None:
+            kw["probe_model"] = point_model
+        elif log is not None:
+            log("  the model was trained with ligandable probe placement and no point model was supplied: "
+                "falling back to tiered placement, which is NOT what it was trained on")
+    else:
+        kw.pop("probe_ligandable_frac", None)
+    return kw
 
 
 def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str | None, limit: int = 0, n_probe: int = 768,

@@ -6,6 +6,8 @@ a field computed in the wrong frame costs equivariance, which no loss curve woul
 are actually found and weighted by occupancy, that the charges sum to the integer charge of the group, that the
 potential is invariant and the field rotates, and that enabling either flag really widens the probe features.
 """
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -325,3 +327,78 @@ def test_evaluate_reports_both_blocks(tmp_path):
     assert len(c["reliability_calibrated"]) == 10
     cfg2 = dict(cfg); cfg2["eval"] = {"calibrate": False}
     assert "calibration" not in NT.evaluate(r["model"], files, torch.device("cpu"), cfg2, log=lambda s: None)
+
+
+def test_composition_exposes_a_site_count_shift():
+    """The confound this exists to surface: two subsets with the same accuracy but a different problem mix."""
+    import pandas as pd
+    from equicave import metrics as MT
+    rows = [dict(pdb=f"a{i}", cluster30=f"c{i}", n_sites=1) for i in range(8)]
+    rows += [dict(pdb=f"b{i}", cluster30=f"c{i}", n_sites=4) for i in range(2)]
+    rows += [dict(pdb="a0", cluster30="c0", n_sites=1)]          # a second candidate row for one structure
+    c = MT.composition(pd.DataFrame(rows))
+    assert c["structures"] == 10 and c["clusters"] == 8          # de-duplicated by pdb, clusters shared on purpose
+    assert c["single_site_fraction"] == pytest.approx(0.8) and c["mean_sites"] == pytest.approx(1.6)
+    assert c["site_counts"] == {1: 8, 4: 2}
+    assert MT.composition(pd.DataFrame([dict(pdb="x")]))["mean_sites"] is None   # no site column: not invented
+
+
+def test_evaluate_declares_the_hard_novelty_subset():
+    """A script, so what is pinned is that the flag and the subset exist and the corpus path is not hardcoded."""
+    src = (pathlib.Path(__file__).resolve().parents[1] / "scripts/eval/evaluate.py").read_text()
+    assert "--novel-corpus" in src and '"novel to all"' in src
+    assert "their_similar" in src and "homology_corpus_clusters.json" in src
+    assert "the 'novel to all' subset is skipped" in src        # missing corpus says so instead of reporting zero
+
+
+# --- the featurisation reaches inference ---------------------------------------------------------------------------
+
+def test_every_width_changing_flag_is_carried_to_inference():
+    """A flag that changes `feat_probe` and is not in FEATURISE_KEYS is a model that cannot be used to predict.
+
+    This is the guard for a bug that was live: the three inference paths passed n_probe, n_surf and k_scale only,
+    so a checkpoint trained with any other featurisation was fed arrays of a different width -- or, for probe
+    placement, of the same width and the wrong distribution, which is silent.
+    """
+    import inspect
+    from training.pockets import data as D
+    cache_only = {"manifest_csv", "pdb_dir", "out_dir", "esm_name", "limit", "device", "log", "n_probe", "n_surf",
+                  "druglike_only", "probe_sampling", "point_model_tag"}
+    expected = set(inspect.signature(D.build_cache).parameters) - cache_only
+    assert expected <= set(D.FEATURISE_KEYS), sorted(expected - set(D.FEATURISE_KEYS))
+
+
+def test_featurisation_kwargs_round_trips_a_config():
+    from training.pockets import data as D
+    dcfg = dict(n_probe=768, n_surf=512, k_scale=1.0, residue_chemistry=False, probe_potential=True,
+                probe_metal=True, probe_electrostatic=False, probe_protrusion=True, probe_conservation=False,
+                conservation_dir="x", probe_sampling="tiered", probe_ligandable_frac=0.5, esm=None)
+    kw = D.featurisation_kwargs(dcfg)
+    assert kw["residue_chemistry"] is False and kw["probe_metal"] is True and kw["probe_protrusion"] is True
+    assert "n_probe" not in kw and "esm" not in kw              # passed positionally / separately
+    assert "probe_ligandable_frac" not in kw                    # meaningless for tiered placement
+    assert "probe_model" not in kw
+    import inspect
+    sig = inspect.signature(D.featurize).parameters
+    assert set(kw) <= set(sig), sorted(set(kw) - set(sig))      # every key is a real featurize argument
+
+
+def test_ligandable_placement_without_a_point_model_says_so():
+    from training.pockets import data as D
+    said = []
+    kw = D.featurisation_kwargs(dict(probe_sampling="ligandable", probe_ligandable_frac=0.5), log=said.append)
+    assert "probe_model" not in kw and said and "NOT what it was trained on" in said[0]
+    kw2 = D.featurisation_kwargs(dict(probe_sampling="ligandable"), point_model="booster")
+    assert kw2["probe_model"] == "booster"
+
+
+def test_metal_channel_excludes_the_ligands_being_predicted(tmp_path):
+    """The leakage path: on a benchmark where an ion is itself a site, an unfiltered metal channel is the label."""
+    f = metal_file(tmp_path, [ATOM_CA, ZN_FULL, FE_HEM])
+    assert len(structure.read_metals(f)["xyz"]) == 2
+    assert structure.read_metals(f, exclude_comps={"ZN"})["comp"].tolist() == ["HEM"]
+    assert len(structure.read_metals(f, exclude_comps={"ZN", "HEM"})["xyz"]) == 0
+    import inspect
+    from training.pockets import data as D
+    src = inspect.getsource(D.featurize)
+    assert "exclude_comps=lig_codes" in src

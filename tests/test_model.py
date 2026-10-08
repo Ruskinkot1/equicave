@@ -651,3 +651,69 @@ def test_the_aggregators_actually_differ():
 def test_an_unknown_aggregator_is_refused():
     with pytest.raises(AssertionError):
         M.SiteDecoder(dim=16, heads=2, agg="median")
+
+
+def test_het_mp_starts_identical_and_stays_equivariant():
+    """Per-edge-type gains: zero-initialised, so the arm measures what they learn, not a different init.
+
+    Both halves matter. If the gains were randomly initialised, `het_mp - full` would mix the mechanism with an
+    initialisation difference, and a win would not say which. And because the gains multiply the degree-1 and
+    degree-2 streams, a non-scalar gain would silently break equivariance -- which no loss curve would show.
+    """
+    torch.manual_seed(0)
+    b = _batch()
+    in_dims = dict(res=5, probe=4, surf=6)
+    kw = dict(dim=16, layers=2, heads=2, n_rbf=8, cutoff=10.0)
+    torch.manual_seed(1); plain = M.EquiCaveNet(in_dims, **kw).eval()
+    torch.manual_seed(1); het = M.EquiCaveNet(in_dims, **kw, het_mp=True).eval()
+    n_plain = sum(p.numel() for p in plain.parameters())
+    n_het = sum(p.numel() for p in het.parameters())
+    assert n_het > n_plain and n_het - n_plain == 2 * 9 * 16 * 3        # layers * edge types * dim * streams
+    with torch.no_grad():
+        o1, o2 = plain(b), het(b)
+    assert torch.allclose(o1["res_logit"], o2["res_logit"], atol=1e-5), "zero-init gains must change nothing"
+    # now make the gains non-trivial and check equivariance still holds
+    with torch.no_grad():
+        for lay in het.layers:
+            lay.het_x.normal_(0, 0.5); lay.het_v.normal_(0, 0.5); lay.het_t.normal_(0, 0.5)
+    R, t = _rot(3), torch.randn(3) * 5
+    with torch.no_grad():
+        a = het(b); c = het(_apply(b, R, t))
+    assert torch.allclose(a["res_logit"], c["res_logit"], atol=1e-4)                     # invariant heads
+    assert torch.allclose(a["center"] @ R.T + t, c["center"], atol=1e-3)                 # equivariant centres
+    assert not torch.allclose(a["res_logit"], o1["res_logit"], atol=1e-4)                # the gains do something
+
+
+def test_het_gain_must_depend_on_the_pair_not_the_destination():
+    """Why the gain is indexed by edge type: a destination-only gain factors out of the aggregation.
+
+    Sum_j a_ij * g(dst_i) * m_ij  ==  g(dst_i) * Sum_j a_ij * m_ij, so indexing by destination buys a per-type
+    scaling of the node update and not a message function -- and VN-EGNN's published gain is for a pairwise one.
+    The arithmetic is checked here rather than trusted, because the two differ by one index and the wrong one
+    would still train, still be equivariant, and still look like heterogeneous message passing in a diff.
+    """
+    g = torch.tensor([2.0, 0.5, 1.5])                       # one gain per destination type
+    a = torch.rand(7); m = torch.randn(7, 4)
+    dst_type = torch.zeros(7, dtype=torch.long)             # every edge into one node: one destination type
+    lhs = (a[:, None] * g[dst_type][:, None] * m).sum(0)
+    rhs = g[0] * (a[:, None] * m).sum(0)
+    assert torch.allclose(lhs, rhs, atol=1e-5)
+    pair = torch.tensor([0, 1, 2, 0, 1, 2, 0])              # the same edges typed by their (src, dst) pair
+    lhs_pair = (a[:, None] * g[pair][:, None] * m).sum(0)
+    assert not torch.allclose(lhs_pair, rhs, atol=1e-3)     # a pairwise gain does not factor out
+
+
+def test_no_edge_type_removes_the_signal_and_keeps_the_width():
+    torch.manual_seed(0)
+    b = _batch()
+    in_dims = dict(res=5, probe=4, surf=6)
+    torch.manual_seed(2); on = M.EquiCaveNet(in_dims, dim=16, layers=2, heads=2, n_rbf=8).eval()
+    torch.manual_seed(2); off = M.EquiCaveNet(in_dims, dim=16, layers=2, heads=2, n_rbf=8, use_edge_type=False).eval()
+    assert sum(p.numel() for p in on.parameters()) == sum(p.numel() for p in off.parameters())
+    with torch.no_grad():
+        assert not torch.allclose(on(b)["res_logit"], off(b)["res_logit"], atol=1e-4)
+    R, t = _rot(5), torch.randn(3) * 3
+    with torch.no_grad():
+        a, c = off(b), off(_apply(b, R, t))
+    assert torch.allclose(a["res_logit"], c["res_logit"], atol=1e-4)
+    assert torch.allclose(a["center"] @ R.T + t, c["center"], atol=1e-3)

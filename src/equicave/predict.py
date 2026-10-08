@@ -17,6 +17,23 @@ import numpy as np
 from . import detect, labels as LB, modes, peptide as PEP, pocket_features as pf, pockets as pk, structure
 
 
+def _load_point_model(tag: str):
+    """The full-data per-point booster, or None. Loud about which one, because the choice is a leakage question.
+
+    At inference on a structure this project never trained on, the full-data model is the right one. Scoring our
+    own training structures needs the fold model that did not see them instead -- that is what `build_cache` uses
+    -- so this loader is deliberately not reached from there.
+    """
+    f = Path(__file__).resolve().parents[2] / "models" / f"point_{tag or 'native'}.txt"
+    if not f.exists():
+        return None
+    try:
+        import lightgbm as lgb
+        return lgb.Booster(model_file=str(f))
+    except Exception:                      # noqa: BLE001  -- missing lightgbm must not break plain detection
+        return None
+
+
 def _network_features(pdb_path, cands, cfg: dict, model_path):
     """Network scores per candidate, or None when no model is available."""
     if model_path is None or not Path(model_path).exists():
@@ -30,8 +47,10 @@ def _network_features(pdb_path, cands, cfg: dict, model_path):
         st = structure.read_pdb(pdb_path); rt = structure.residue_table(st)
         esm = cached(Embedder(mcfg["data"]["esm"]), Path(pdb_path).stem, rt["seq"], rt["chain"],
                      Path(__file__).resolve().parents[2] / "data/cache/esm")
+    pm = _load_point_model(mcfg["data"].get("point_model_tag", "")) \
+        if mcfg["data"].get("probe_sampling") == "ligandable" else None
     d = D.featurize(pdb_path, None, esm, mcfg["data"]["n_probe"], mcfg["data"]["n_surf"],
-                    k_scale=mcfg["data"].get("k_scale", 1.0))
+                    **D.featurisation_kwargs(mcfg["data"], point_model=pm, log=print))
     if d is None:
         return None, None
     rots = cfg["test_time"]["rotations"]
