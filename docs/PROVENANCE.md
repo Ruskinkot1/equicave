@@ -20,6 +20,8 @@ Where an idea comes from a publication, it is listed below with the form in whic
 | hotspot field | per-point ligand-atom type probability (pharmacophore-style maps) | fragment hotspot maps (Radoux 2016), FTMap-type methods | focal BCE over 7 CCD-derived atom classes on cavity lattice points, labelled from crystal ligand atoms within 1.5 Å |
 | top-(N+2) and the ligand rule | evaluation convention for pocket detection | P2Rank (Krivák 2018), DeepPocket (Aggarwal 2021) | implemented in `metrics.per_structure`; the `_mlig` lists are fetched, not redistributed |
 | hybrid ranking | a learned re-ranker over candidates beats end-to-end detection | LIGYSIS comparison (Utgés & Barton 2024) | LightGBM LambdaRank over our own features, cluster CV, paired cluster bootstrap |
+| metal channels (`pocket_features.point_metal`, `structure.read_metals`) | a metal ion as a model input at all | **DeepSite** (Jiménez 2017) has a `metallic` grid channel; **Kalasanty** (Stepniewska-Dziubinska 2020) and **DeepSurf** (Mylonas 2021) inherit a `metal` bit from Pafnucy's 18 atom features. None of the three ablates it, and DeepPocket and GrASP strip heteroatoms instead | per probe, per chemical role (transition / alkaline earth / alkali): distance to the nearest ion and an **occupancy-weighted** count. The grouping, the occupancy weighting and the per-probe form are ours. The weighting is motivated by **Metal3D**'s (Dürr 2023) estimate that about a third of PDB zinc sites are crystallisation artefacts, so a presence bit would assert more than the file supports |
+| screened-Coulomb channels (`pocket_features.point_field`, `formal_charges`) | electrostatics as a network input without a solver | **dMaSIF** (Sverrisson, CVPR 2021) removed MaSIF's Poisson–Boltzmann solve, replaced it with a learned function of atom types and inverse distances, and *gained* accuracy (0.85 → 0.87 on the same interface split) at ~1/1000 of the preprocessing cost. What we take from that is the negative claim: a solver is not worth paying for here | our term is neither theirs nor a PB solve: formal charges spread over the atoms of each ionised group, a Debye–Hückel screened Coulomb sum (λ = 7.8 Å), the potential and ‖E‖ as scalars and **E itself as a degree-1 channel**. No force-field parameter file is read, so no force-field licence applies. We found no published comparison of a cheap Coulomb field against a PB solve as a network input for any of the three tasks, which is why the arm exists |
 | peptide groove features | backbone-to-backbone recognition in peptide grooves | β-augmentation / PDZ, SH3, MHC structural literature | `peptide.backbone_exposure`: counts of receptor backbone N, O, Cα and side-chain atoms within 6 Å of each candidate point, plus shape anisotropy |
 
 ## Verification log
@@ -45,3 +47,16 @@ Where an idea comes from a publication, it is listed below with the form in whic
   the per-destination normalisation is our own choice, made so the statistics cannot cross a structure boundary.
   Their Table 1 and Figure 4a are used as evidence in `docs/results/README.md`; their licence is not stated in the
   preprint [не найдено], which is why only the idea and the published numbers are used.
+- The electrostatics, hydration, protonation/metal, chemistry-in-network and pharmacophore-output literature was
+  read on 2026-10-08; the notes with per-claim verification marks are in
+  `research_notes/Химия в архитектуре предсказания/` and the synthesis in `reports/`. Three numbers used above
+  were read from the primary PDFs [проверено]: dMaSIF Table 1 (feature step 19.69 ± 16.08 s per protein against a
+  36 ms forward pass), Kalasanty's "18 atomic features used in our previous project" and DeepSurf's matching
+  sentence, which is how we know both inherit Pafnucy's single partial-charge channel without testing it. That
+  **no** site predictor conditions on protonation state, and that **no** metal input channel has ever been
+  ablated, are absence claims from that search [не найдено], not proofs.
+- **AllMetal3D** (MIT licence, pip-installable, 11 metals) is the candidate for *predicted* metal positions in apo
+  structures, where there are no HETATM ions to read. Not implemented and not run: `point_metal` reads the file.
+- The Debye–Hückel screening length (7.8 Å at 150 mM monovalent salt, 298 K) and the formal charges of Arg, Lys,
+  Asp and Glu are textbook, taken from no paper in particular [из памяти]. Nothing here uses Amber, CHARMM,
+  Gasteiger or AM1-BCC parameters, so the charge set carries no third-party licence.

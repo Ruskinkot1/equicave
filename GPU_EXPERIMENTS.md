@@ -129,6 +129,27 @@ Each arm is the full model minus one thing, so the baseline is the configuration
 | `no_listwise` | the only term that orders probes within one structure (P2) | none for pockets | +0.01 to +0.05, wide |
 | `no_probe_potential` | the 21 per-probe interaction channels and their masked head (P1) | our own ranker: the group is worth −0.021 top-1 | +0.01 to +0.04 |
 
+### Chemistry the model does not have (additions, not removals)
+
+Three arms added on 2026-10-08 after the literature review in `reports/`. They are *additions*, so `full` stays
+the arm the pre-registered predictions were written against and a gain has to clear the same +0.02 threshold.
+Cost measured on 11AP at the shipped probe budget: **+0.07 s per structure for the metals, nothing measurable for
+the field**, against 0.71 s for the rest of the featurisation. Both run once, into the cache.
+
+| arm | what it adds | published prior | my expectation |
+|---|---|---|---|
+| `probe_metal` | 6 channels: distance to the nearest ion and occupancy-weighted count, per metal role | two methods carry a metal bit, **none ablates it**; ions are ≈40 % of LIGYSIS ligand sites, and removing them moves top-(N+2) by 5–10 points for every method but fpocket | **+0.01 to +0.03**, concentrated on the metal-bearing structures; near zero on COACH420, which has almost no ion sites by construction (P2Rank's ≥5-atom rule) |
+| `probe_electrostatic` | screened-Coulomb potential and ‖E‖ as scalars, **E as a degree-1 channel** | no comparison of a cheap Coulomb field against a PB solve as a network input exists for any of the three tasks; dMaSIF's result argues the solver is not worth paying for | **0 to +0.01, and a fourth null is the honest base case**: our ionisable-group distances and counts are already in `probe_potential`, so this may re-encode what the model has. Run for the number, not the hope |
+| `probe_chemistry` | both | — | whatever the two give separately; run to catch an interaction, not as the headline |
+
+The order matters: `no_probe_potential` runs **first**. It asks whether the chemistry already in the model does any
+work. If removing 21 chemical channels costs nothing, an addition that supplies more chemistry has no reason to
+help, and the three arms above are a prediction of three more nulls rather than a plan.
+
+```bash
+EXTRA="" GROUP=chemistry SEEDS=3 bash scripts/train/run_ablations.sh   # all four, per-arm caches, resumable
+```
+
 ```bash
 for arm in no_direction_loss single_stage no_listwise no_probe_potential; do
   for s in 0 1 2; do

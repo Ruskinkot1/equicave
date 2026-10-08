@@ -28,7 +28,8 @@ def _element(line: str) -> str:
 def read_pdb(path, chains: str | None = None, model: int = 1) -> dict:
     """Protein heavy atoms of one model.
 
-    Returns xyz [N,3], element, resname, resid ('A_123'), chain, atom name, backbone flag, b-factor, occupancy.
+    Returns xyz [N,3], element, resname, resid ('A_123'), chain, atom name, backbone flag, b-factor.
+    Metal ions and cofactor metals are *not* here: they are not polymer atoms, and `read_metals` reads them.
     MSE (selenomethionine) is kept as a residue; its HETATM records are read because it is part of the chain.
     """
     xyz, el, rn, rid, ch, an, bb, bf = [], [], [], [], [], [], [], []
@@ -199,3 +200,46 @@ def read_peptide_ligands(path, min_res: int = 3, max_res: int = 30, min_heavy: i
 def receptor_chains(path, receptor_min_res: int = 50, model: int = 1) -> str:
     """Chain ids of the chains long enough to be the receptor (used to exclude peptide chains from the protein input)."""
     return "".join(c for c, n in chain_lengths(path, model).items() if n >= receptor_min_res)
+
+
+# Metal ions and the metal centres of cofactors. `read_pdb` reads the polymer only, so none of these atoms reaches
+# anything built on it -- which is the state the literature is in as well: of the eight site predictors surveyed in
+# docs/LITERATURE.md, two carry a metal input bit (DeepSite, Kalasanty/DeepSurf), two strip heteroatoms outright and
+# none publishes an ablation of it, while ions account for about 40 % of ligand sites in LIGYSIS.
+METAL_ELEMENTS = frozenset("ZN MG CA FE MN CU NA K CO NI CD HG MO W V SR BA PT AU AG LI".split())
+
+
+def read_metals(path, model: int = 1, min_occupancy: float = 0.0) -> dict:
+    """Metal atoms of one model, from any HETATM group: xyz, element, occupancy, comp.
+
+    Read separately from the polymer because a metal is not a protein atom -- it has no residue, no atom name worth
+    typing and no backbone -- and because its occupancy is the only cheap confidence available that the site is real.
+    That matters here: Metal3D's authors estimate about a third of the zinc sites in the PDB are crystallisation
+    artefacts, so a hard presence flag would assert more than the file supports. Cofactor metals are included (the
+    iron of a haem is an element FE atom in a HEM group), since to a cavity they are chemistry like any other.
+    """
+    xyz, el, occ, comp = [], [], [], []
+    cur_model = 1
+    for line in Path(path).read_text(errors="ignore").splitlines():
+        tag = line[:6]
+        if tag == "MODEL ":
+            cur_model = int(line[10:14]); continue
+        if tag == "ENDMDL" and cur_model >= model:
+            break
+        if cur_model != model or tag != "HETATM" or len(line) < 54:
+            continue
+        if line[16] not in (" ", "A", "1"):
+            continue
+        e = _element(line)
+        if e.upper() not in METAL_ELEMENTS:
+            continue
+        try:
+            o = float(line[54:60])
+        except ValueError:
+            o = 1.0
+        if o < min_occupancy:
+            continue
+        xyz.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
+        el.append(e.upper()); occ.append(o); comp.append(line[17:20].strip())
+    return dict(xyz=np.asarray(xyz, float).reshape(-1, 3), element=np.array(el, dtype="<U2"),
+                occupancy=np.asarray(occ, float), comp=np.array(comp, dtype="<U3"))

@@ -323,3 +323,101 @@ def rank_sites(model_path, cands: list[dict], st: dict, extra: list[dict] | None
     for r, v in zip(rows, booster.predict(X)):
         r["ranker_score"] = float(v)
     return sorted(rows, key=lambda r: -r.get("ranker_score", 0.0))
+
+
+# Metals, grouped by what they do to a cavity rather than by period. A transition-metal centre makes a cavity a
+# catalytic or a chelator site; Mg/Ca mark phosphate and carboxylate binding; Na/K are mostly incidental in a
+# crystal. The groups are coarse on purpose: the per-element counts are too sparse to learn from at our scale.
+METAL_GROUPS = (("transition", frozenset("ZN FE MN CU NI CO CD HG MO W V PT AU AG".split())),
+                ("alkaline_earth", frozenset("MG CA SR BA".split())),
+                ("alkali", frozenset("NA K LI".split())))
+
+
+def point_metal(points: np.ndarray, metals: dict, count_radius: float = 8.0) -> tuple[np.ndarray, np.ndarray]:
+    """Per point and metal group: distance to the nearest ion, and the occupancy-weighted count within the radius.
+
+    Returns (distance [P, 3] capped at `2 * count_radius`, weighted count [P, 3]).
+
+    The count is weighted by crystallographic occupancy rather than counting presence, so a 0.3-occupancy ion
+    contributes a third of one. This is the cheapest available stand-in for "is this site real", and the reason to
+    bother is that the alternative in the published models is a hard bit (DeepSite's `metallic` channel,
+    Kalasanty's and DeepSurf's `metal` bit) which none of them ablates.
+    """
+    pts = np.atleast_2d(np.asarray(points, float))
+    n, g = len(pts), len(METAL_GROUPS)
+    dist = np.full((n, g), count_radius * 2, np.float32)
+    wcount = np.zeros((n, g), np.float32)
+    mx = np.asarray(metals.get("xyz", np.zeros((0, 3))), float).reshape(-1, 3)
+    if n == 0 or len(mx) == 0:
+        return dist, wcount
+    el = np.array([str(e).upper() for e in metals["element"]])
+    occ = np.asarray(metals.get("occupancy", np.ones(len(mx))), float)
+    for j, (_, members) in enumerate(METAL_GROUPS):
+        m = np.isin(el, list(members))
+        if not m.any():
+            continue
+        tr = cKDTree(mx[m]); w = occ[m]
+        dist[:, j] = np.minimum(tr.query(pts)[0], count_radius * 2)
+        wcount[:, j] = [w[nb].sum() if nb else 0.0 for nb in tr.query_ball_point(pts, count_radius)]
+    return dist, wcount
+
+
+DEBYE_LENGTH = 7.8          # angstroms, 150 mM monovalent salt at 298 K
+FIELD_CUTOFF = 15.0         # beyond ~2 Debye lengths the screened term is under a fifth of its unscreened value
+
+
+def formal_charges(st: dict, types: dict | None = None) -> np.ndarray:
+    """Per receptor heavy atom, a formal charge in units of e, shared out over the atoms of each ionised group.
+
+    Arg's two NH1/NH2 and NE each carry +1/3, Asp's two carboxylate oxygens +(-1/2) each, and so on, so the group's
+    total is the integer charge wherever its atoms are resolved and less where they are not. There is no force field
+    here and no partial charges: a charge set would need Amber or CHARMM parameters, and the published record gives
+    no reason to pay for them -- dMaSIF replaced a Poisson-Boltzmann solve (19.7 s per protein, 120x its own forward
+    pass) with a learned function of atom types and inverse distances and *gained* accuracy, 0.85 -> 0.87 on the
+    identical interface split. What is untested anywhere is the cheap middle: a screened Coulomb term from the
+    formal charges, which is what this and `point_field` are.
+    """
+    from . import labels as LB
+    types = types or LB.protein_atom_types(st)
+    q = np.zeros(len(st["xyz"]), np.float32)
+    for mask, sign in ((types["cation"], 1.0), (types["anion"], -1.0)):
+        if not mask.any():
+            continue
+        idx = np.where(mask)[0]
+        for rid in np.unique(st["resid"][idx]):
+            sel = idx[st["resid"][idx] == rid]
+            q[sel] = sign / len(sel)
+    return q
+
+
+def point_field(points: np.ndarray, st: dict, types: dict | None = None, cutoff: float = FIELD_CUTOFF,
+                debye: float = DEBYE_LENGTH) -> tuple[np.ndarray, np.ndarray]:
+    """Screened-Coulomb potential and field at each point from the receptor's ionised groups.
+
+    Returns (potential [P], field [P, 3]) in units of e/A and e/A^2 with the dielectric left at 1, so both are
+    arbitrary up to the one scale the network normalises away. The screening is Debye-Huckel, exp(-r/lambda) / r
+    with lambda = 7.8 A for physiological salt, which is also what makes the 15 A cutoff safe.
+
+    The field is a degree-1 quantity and goes into the vector channels, so a rotated structure gives a rotated
+    field and equivariance is untouched. The potential is the invariant and goes in with the other scalars.
+    """
+    pts = np.atleast_2d(np.asarray(points, float))
+    pot = np.zeros(len(pts), np.float32)
+    fld = np.zeros((len(pts), 3), np.float32)
+    if len(pts) == 0:
+        return pot, fld
+    q = formal_charges(st, types)
+    nz = np.where(np.abs(q) > 1e-6)[0]
+    if len(nz) == 0:
+        return pot, fld
+    cx, cq = st["xyz"][nz], q[nz]
+    tr = cKDTree(cx)
+    for i, nb in enumerate(tr.query_ball_point(pts, cutoff)):
+        if not nb:
+            continue
+        d = cx[nb] - pts[i]
+        r = np.maximum(np.linalg.norm(d, axis=1), 1.0)          # 1 A floor: a probe can sit on a charged atom
+        w = cq[nb] * np.exp(-r / debye) / r
+        pot[i] = w.sum()
+        fld[i] = -(w / r)[:, None].T @ (d / r[:, None])         # E = -grad phi, screening term dropped (<= 13 %)
+    return pot, fld

@@ -73,6 +73,9 @@ GROUPS = {
     "equivariance": ["invariant_frames", "invariant_blind", "no_tensors_matched", "no_vectors_matched",
                      "e3nn_l1", "e3nn_l2", "e3nn_l3"],
     "mechanisms":   ["no_direction_loss", "no_listwise", "single_stage", "no_probe_potential"],
+    # Chemistry: `no_probe_potential` first on purpose. It asks whether the chemistry already in the model does any
+    # work; if it does not, an addition that supplies more of the same has no reason to help either.
+    "chemistry":    ["no_probe_potential", "probe_metal", "probe_electrostatic", "probe_chemistry"],
     "capacity":     ["small", "deep", "wide", "big"],
     "scale":        ["scale_max", "scale_max_big"],
 }

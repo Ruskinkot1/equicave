@@ -113,7 +113,8 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
               seed: int = 0, entries: dict | None = None, k_scale: float = 1.0, druglike_only: bool = False,
               require_interaction: bool = True, residue_chemistry: bool = True,
               probe_potential: bool = True, probe_model=None,
-              probe_ligandable_frac: float = 0.5) -> dict | None:
+              probe_ligandable_frac: float = 0.5, probe_metal: bool = False,
+              probe_electrostatic: bool = False) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable.
 
     `probe_model`: an optional per-point ligandability booster. Probes are the one component the ablation shows to
@@ -178,11 +179,25 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
     cnt = np.stack([np.array([len(x) for x in tree.query_ball_point(ppos, r)]) for r in (4.0, 6.0, 8.0)], 1).astype(np.float32)
     feat_probe = np.concatenate([pb[:, None] / 26, pd_[:, None] / 8, (pb >= detect.DETECT_MIN_BURIED)[:, None].astype(np.float32),
                                  cnt / np.array([20, 60, 140], np.float32)], 1)
+    types_e = LB.protein_atom_types(st) if (probe_potential or probe_electrostatic) else None
     if probe_potential:
-        types_p = LB.protein_atom_types(st)
+        types_p = types_e
         trees_p = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types_p.items()}
         cnt_p, dmin, avail = pf.point_potential(ppos, trees_p)
         feat_probe = np.concatenate([feat_probe, avail, dmin / 6.0, np.log1p(cnt_p) / 3.0], 1).astype(np.float32)
+    if probe_metal:
+        # Metals reach the network from `read_metals`, not from `read_pdb`: the parser keeps the polymer only, so
+        # until now every ion in every training structure was discarded before featurisation. Ions are about 40 %
+        # of ligand sites in LIGYSIS and no published site predictor ablates its metal channel, so this is new
+        # information rather than a re-encoding of something the model already has -- which is the property the
+        # ESM-2, surface and degree-2 arms all failed to have.
+        md, mw = pf.point_metal(ppos, structure.read_metals(pdb_path))
+        feat_probe = np.concatenate([feat_probe, md / 16.0, np.log1p(mw) / 2.0], 1).astype(np.float32)
+    e_fld = None
+    if probe_electrostatic:
+        e_pot, e_fld = pf.point_field(ppos, st, types_e)
+        feat_probe = np.concatenate([feat_probe, e_pot[:, None] * 2.0,
+                                     np.linalg.norm(e_fld, axis=1, keepdims=True) * 10.0], 1).astype(np.float32)
     dn, jn = tree.query(ppos)
     v1 = (xyz[jn] - ppos) / np.maximum(dn[:, None], 1e-6)
     v2 = np.zeros_like(ppos)
@@ -190,7 +205,10 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         if nb:
             d = xyz[nb] - ppos[i]; v2[i] = d.mean(0)
     v2 /= np.maximum(np.linalg.norm(v2, axis=1, keepdims=True), 1e-6)
-    vec_probe = np.stack([v1, v2] + [np.zeros_like(v1)] * (vec_res.shape[1] - 2), 1).astype(np.float32)
+    pvec = [v1, v2]
+    if e_fld is not None:                       # degree 1, so it rotates with the structure: see pf.point_field
+        pvec.append(e_fld / np.maximum(np.linalg.norm(e_fld, axis=1, keepdims=True), 1e-6))
+    vec_probe = np.stack(pvec + [np.zeros_like(v1)] * (vec_res.shape[1] - len(pvec)), 1).astype(np.float32)
     # surface points
     spts, owner = pk.sas_points(xyz, pk.vdw_radii(st["element"]), n_sphere=30)
     if len(spts) > n_surf:
@@ -422,7 +440,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                 n_surf: int = 512, device: str = "cpu", log=print, k_scale: float = 1.0, druglike_only: bool = False,
                 require_interaction: bool = True, residue_chemistry: bool = True,
                 probe_potential: bool = True, probe_sampling: str = "tiered",
-                point_model_tag: str = "", probe_ligandable_frac: float = 0.5) -> list[str]:
+                point_model_tag: str = "", probe_ligandable_frac: float = 0.5,
+                probe_metal: bool = False, probe_electrostatic: bool = False) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent.
 
     `probe_sampling="ligandable"` places the probes by the per-point model instead of at random within each tier.
@@ -444,6 +463,7 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                probe_potential=probe_potential, probe_sampling=probe_sampling,
                point_model_tag=point_model_tag if probe_sampling == "ligandable" else "",
                probe_ligandable_frac=probe_ligandable_frac if probe_sampling == "ligandable" else None,
+               probe_metal=probe_metal, probe_electrostatic=probe_electrostatic,
                esm=esm_name, geometry=pf.geometry())
     sig_file = out_dir / ".featurisation.json"
     if sig_file.exists():
@@ -496,7 +516,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                               druglike_only=druglike_only, require_interaction=require_interaction,
                               residue_chemistry=residue_chemistry, probe_potential=probe_potential,
                               probe_model=fold_models.get(int(r["fold"])),
-                              probe_ligandable_frac=probe_ligandable_frac)
+                              probe_ligandable_frac=probe_ligandable_frac,
+                              probe_metal=probe_metal, probe_electrostatic=probe_electrostatic)
                 if d is not None and "y_res" in d:
                     d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                     save(d, f); done.append(r["pdb"])

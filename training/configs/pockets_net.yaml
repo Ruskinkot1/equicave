@@ -10,6 +10,11 @@ data:
   require_interaction: true    # hotspot labels only where the ligand atom really makes that interaction
   druglike_only: false         # true: train the field on drug-like ligands only
   probe_potential: true        # per-probe interaction potential as input channels and as a masked target
+  # Chemistry the model has never had. Both default to **false**, so `full` is still the arm the pre-registered
+  # predictions were written against; the `probe_metal`, `probe_electrostatic` and `probe_chemistry` arms turn them
+  # on and are measured as additions. They flip to true only on a gain that clears the pre-registered threshold.
+  probe_metal: false           # 6 channels: nearest distance and occupancy-weighted count, per metal group
+  probe_electrostatic: false   # screened-Coulomb potential and |E| as scalars, the field itself as a vector channel
   # Where the probes go. The first trained ablation says probes are the architecture: removing them costs 0.263
   # site top-1, while the surface module, the language model, the degree-2 channels and chirality are all within
   # two seed standard deviations of zero. `ligandable` spends the probe budget by the per-point model's prediction

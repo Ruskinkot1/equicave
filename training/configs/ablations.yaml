@@ -15,6 +15,33 @@ ablations:
   nearest_probe_loss: {loss.hungarian: false}
   no_residue_chemistry: {data.residue_chemistry: false}
   no_probe_potential: {data.probe_potential: false, loss.w_potential: 0.0, loss.pot_mask_frac: 0.0}
+  # Chemistry the model does not have at all, each arm an *addition* rather than a removal, so `full` stays the
+  # model the pre-registered predictions were written against and these are measured against the +0.02 threshold.
+  #
+  # The literature review (reports/, research_notes/) is the reason these two and not the obvious third. Partial
+  # charges and a Poisson-Boltzmann solve are the obvious third, and the record argues against paying for them:
+  # Kalasanty, DeepSurf and Pafnucy all carry one partial-charge channel and **none of the three ablates it**; the
+  # one real feature-subset ablation with PB electrostatics is MaSIF-site, on interfaces, worth about 0.02 ROC AUC;
+  # and dMaSIF then removed the PB solve on the identical split, replaced it with a learned function of atom types
+  # and inverse distances, and went 0.85 -> 0.87 at about 1/1000 of the preprocessing cost (MaSIF's feature step is
+  # 19.69 +- 16.08 s per protein against a 36 ms dMaSIF forward pass). What nobody has run is the cheap middle:
+  #
+  #   * `probe_electrostatic` -- a screened Coulomb term from formal charges, no force field and no solver, under a
+  #     second per structure. Our own ionisable-group distances and counts are already in `probe_potential`, so this
+  #     arm is at genuine risk of being the fourth null: it may carry nothing those channels do not. It is worth one
+  #     run anyway because the comparison "cheap Coulomb field as a network input" has no published number at all.
+  #     The field goes in as a degree-1 channel, which is also the first input our vector channels get that is not
+  #     derived from the geometry they already see.
+  #   * `probe_metal` -- the one addition that is unambiguously *new information*: `structure.read_pdb` keeps the
+  #     polymer only, so every metal ion in every training structure has been discarded before featurisation.
+  #     Ions are about 40 % of ligand sites in LIGYSIS, and removing ion sites from it moves top-(N+2) recall by
+  #     5-10 points for every method but fpocket. Of the published site predictors, two carry a metal input bit and
+  #     none ablates it, so this measurement does not exist anywhere either.
+  #
+  # Each arm overrides `data.*`, so run_ablations.sh gives it its own feature cache automatically.
+  probe_metal: {data.probe_metal: true}
+  probe_electrostatic: {data.probe_electrostatic: true}
+  probe_chemistry: {data.probe_metal: true, data.probe_electrostatic: true}
   # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
   # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.
