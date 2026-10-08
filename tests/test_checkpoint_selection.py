@@ -77,3 +77,25 @@ def test_weights_can_be_overridden_from_the_config():
 def test_missing_everything_is_nan_not_an_exception():
     import math
     assert math.isnan(select_score({}, None))
+
+
+def test_stage1_zeroes_every_term_that_reads_the_decoder():
+    """A sparse term that ranks sites whose centres are unsupervised is minimised against nothing.
+
+    Measured on the first `full` run with the decoder on: across three epochs site_rank fell 1.346 -> 0.101 and
+    site_margin 0.92 -> 0.043 while the centre loss rose 1.159 -> 4.857 and site top-1 collapsed 0.757 -> 0.015.
+    Both terms read `site_logit` and `site_center`, and the centre head is held at zero in stage 1, so they have
+    to be held too. The test is on the shipped config because this was an omission, not a bug in the loop: the
+    decoder was added after the staging was designed.
+    """
+    import pathlib, yaml
+    for name in ("pockets_net.yaml", "pockets_net_cpu_real.yaml"):
+        f = pathlib.Path("training/configs") / name
+        if not f.exists():
+            continue
+        st = yaml.safe_load(f.read_text()).get("stages") or {}
+        if not st.get("enabled"):
+            continue
+        z = set(st.get("stage1_zero", []))
+        assert {"w_center", "w_conf"} <= z, name
+        assert {"w_site_rank", "w_site_margin"} <= z, f"{name}: the decoder's ranking terms must be held in stage 1"

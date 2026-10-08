@@ -11,6 +11,9 @@ target you are designing against, **peptide** for peptide binders.
    **interaction-validated**: a point counts only where the crystal ligand atom witnessing it really makes that
    contact with the receptor (H-bond, hydrophobic, stacking, salt bridge, halogen bond), optionally restricted to
    drug-like ligands.
+4. **A site report** (`equicave.site_report`) — what a user acts on rather than what a benchmark scores: a docking
+   box, the maximum inscribed radius, the lining residues, a ligand-type guess, and the hotspot field reduced to a
+   **spatially resolved pharmacophore map** (seven classes per probe, not one label per pocket).
 
 Peptide binders have their own candidate tier (shallow elongated grooves) and their own benchmark.
 
@@ -21,6 +24,36 @@ Peptide binders have their own candidate tier (shallow elongated grooves) and th
 All on RCSB structures split by 30 %-identity cluster, 5-fold cross-validation, 5 seeds, 95 % CI by cluster bootstrap.
 Success = DCA ≤ 4 Å from a predicted centre to a ligand heavy atom. N = the structure's own number of ligand sites
 (mean 2.27 here), so top-1 is the strictest column.
+
+### Settled on 2026-10-08
+
+**A second stage over the top candidates is closed, not deferred.** 1367 structures, 40 986 candidates, 5-fold
+cluster CV, 4 seeds. All six configurations stay below the single stage, and the column budget — the cause the
+earlier failure named — acts in the predicted direction inside the cascade without recovering it:
+
+| method | top-1 | top-N | top-(N+2) |
+|---|---|---|---|
+| one stage, LambdaRank over 204 features | **0.792 [0.770, 0.814]** | 0.833 | 0.903 |
+| cascade over the top 3, 20 columns | 0.785 [0.761, 0.808] | 0.824 | 0.906 |
+| cascade over the top 5, 20 columns | 0.786 [0.763, 0.810] | 0.830 | 0.901 |
+| cascade over the top 5, 40 columns | 0.775 [0.752, 0.799] | 0.822 | 0.901 |
+
+The published cascade gain (+7 to +14 Top-n, PRANK over fpocket) comes from putting a learned stage over a
+*geometric* one whose candidate ceiling is 80.78 % on COACH420; ours is already learned over a list with a ceiling
+of 0.977. The intervention is "geometry to learned", not "learned to learned twice".
+
+**Two channels bounded before they were added.** A metal sits within 5 Å of 13.4 % of correct candidates against
+1.8 % of decoys (7.3×, lifting a candidate's chance of being correct from a 6.9 % base rate to 35.5 %), but the AUC
+of that distance alone is **0.544** because 87 % of correct candidates have no metal in range — so the arm caps
+near 0.034 top-1. Long-range atom counts, by contrast, are **not** redundant with our closure field: single-count
+correct-against-decoy AUC is 0.650 at 8 Å and **0.837 at 12 Å** against 0.755 for the 26-direction closure, and a
+logistic model on our existing geometric inputs goes **0.7999 → 0.8469** (5-fold CV) when counts at 10, 12 and 15 Å
+are added. Reproduced by `scripts/eval/probe_geometry_headroom.py`.
+
+**The network ablation reference is void for new comparisons.** The table below (2026-10-06) stands as published,
+but `full` must be re-measured before any new arm is differenced against it: that run predates the site decoder by
+three hours and the checkpoint-selection fix by a day, and the old numbers were chosen by a rule that cannot see
+site detection. See `docs/results/PREREGISTERED.md`, amendment (b).
 
 ### Candidate generation, 1367 structures
 | | ceiling | candidates | median best DCA |
@@ -208,10 +241,37 @@ All three manifests are committed. Without a GPU the network stages fall back to
 converges but is not publishable, and say so; every other stage is CPU work. Details and per-stage commands in
 [`RUN.md`](RUN.md); the GPU experiment plan in [`GPU_EXPERIMENTS.md`](GPU_EXPERIMENTS.md).
 
+### One run, and the ablation grid
+
+```bash
+export PYTHONPATH=src:.
+
+# a single arm; without --out the directory is stamped with the launch time
+python -m training pockets-net --config training/configs/pockets_net.yaml   --set ablation=full --set split.val_fold=0 --set optim.seed=0   --set stages.warmup_epochs=6 --set optim.epochs=30 --device cuda
+
+DRY_RUN=1 GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh   # the plan and the cost
+GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh             # full, full_next, noise_aug, probe_protrusion
+ARMS="full no_site_decoder" SEEDS=3 bash scripts/train/run_ablations.sh
+```
+
+Arms live in `training/configs/ablations.yaml` (57 of them) and groups in `run_ablations.sh`: `baseline`, `inputs`,
+`architecture`, `decoder`, `probes`, `equivariance`, `mechanisms`, `capacity`, `scale`, `chemistry`, or `all`.
+`full` is always added, because every arm is a difference against it. An arm that overrides any `data.*` key gets
+its own feature cache automatically — the cache is keyed by PDB id, so sharing one would measure the wrong
+featurisation. `RESUME=1` continues the most recent dated grid instead of starting one; a run whose `metrics.json`
+exists is skipped.
+
+Two settings decide comparability and should be fixed once for a whole grid. The **schedule**: the default here is
+the shortened one (`warmup_epochs=6`, `epochs=30`), and a full-schedule run measured site top-1 at 0.000 through
+the entire 20-epoch warmup while `occ_ap` peaked at epoch 14–15 and fell by epoch 20 — so the long warmup costs
+time and gives back nothing. `EXTRA=""` restores it, but then the arm is not comparable with arms run under the
+default. The **selection criterion**: `net_top1` 0.5 / `occ_ap` 0.25 / `res_ap` 0.25, which matters because the
+ranking terms buy ordering with dense accuracy (`occ_ap` falls monotonically through stage 2 while top-1 rises).
+
 ## Layout
 | path | contents |
 |---|---|
-| `src/equicave/` | `detect` (candidates), `peptide` (grooves), `pockets` (grid, buriedness, SAS), `pocket_features` (118 ranker features), `labels` (+ interaction validation), `ccd`, `metrics`, `structure`, `viz`, `mcp_server` |
+| `src/equicave/` | `detect` (candidates), `peptide` (grooves), `pockets` (grid, buriedness, SAS), `pocket_features` (ranker features, probe potentials, metals, screened Coulomb, protrusion, conservation), `labels` (+ interaction validation), `site_report` (the user-facing object and the pharmacophore map), `calibration` (temperature scaling and the sum-of-squares ranking it can move), `conservation`, `ccd`, `metrics`, `structure`, `viz`, `mcp_server` |
 | `training/` | `pockets/model.py` (EquiCave-Net), `data.py`, `net_task.py`, `labels_task.py`, `configs/`, `environment.yml`, `Dockerfile` |
 | `scripts/` | `data/` (manifests, structures, benchmark lists), `train/`, `eval/`, `baselines/` |
 | `data/processed/` | small tables only; structures and third-party data are rebuilt, never committed |
@@ -278,6 +338,29 @@ reflection: with them the network is SO(3)- but not O(3)-equivariant, so chirali
 layer-normalised, vector and tensor channels RMS-normalised per node. Equivariance is verified numerically for every
 head (random rotation and translation, tolerance 1e-4), together with a mirror test that the achiral variant is
 reflection-invariant and the chiral one is not.
+
+Four input groups are implemented but **off by default**, each with its own ablation arm, its own feature cache
+and a prediction recorded before it ran (`docs/results/PREREGISTERED.md`): metals and cofactor metals with
+crystallographic occupancy as the confidence (`read_pdb` reads the polymer only, so until 2026-10-08 every ion in
+every training structure was discarded before featurisation, while 26.5 % of our sites have one within 8 Å); a
+Debye–Hückel screened-Coulomb term from formal charges, whose potential and magnitude enter as scalars and whose
+**field enters as a degree-1 channel**, so a rotated structure gives a rotated field; per-probe MSA conservation
+with the coverage of the lining by the alignment, so a thin alignment is not read as low conservation; and
+long-range atom counts at 10, 12 and 15 Å — P2Rank's protrusion, its most important feature by a factor of six,
+which our probe channels stopped short of at 8 Å. Metals exclude the ligand codes being predicted, because on a
+benchmark where an ion is itself a site an unfiltered channel reads the label.
+
+Two architectural switches are likewise off by default: `het_mp` gives each of the nine ordered type pairs its own
+invariant gain per stream (indexed by the pair and not the destination, because a destination-only gain factors out
+of the attention-weighted sum and would be a per-type scaling of the node update rather than a message function),
+and `use_edge_type: false` is the removal that asks whether type awareness does anything at all.
+
+Evaluation emits two things no paper in this field reports. A **calibration block**: the occupancy head's
+temperature fitted on a hash-split half of the validation structures and reported on the other half, with the ECE
+before and after, the reliability curve, and the sum-of-squares site ranking recomputed under the temperature —
+calibration cannot reorder a ranking by maximum or mean, but sum of squares is not monotone-invariant, and it is
+the default aggregator. And **per-class metrics** over the 14 property classes, with counts only below ten
+structures, because an aggregate hides exactly the heterogeneity that is often the finding.
 
 Five heads share the trunk: residue and probe segmentation (Dice + BCE), a site centre read out as an **equivariant
 vector offset** from `V` and trained with a set loss over all sites of the structure (each true site is approached by

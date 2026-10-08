@@ -59,7 +59,7 @@ loss:
 stages:
   enabled: true
   warmup_epochs: 6
-  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop]
+  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop, w_site_rank, w_site_margin]
 optim:
   lr: 0.001
   weight_decay: 0.01

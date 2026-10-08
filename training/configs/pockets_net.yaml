@@ -128,7 +128,14 @@ stages:
   # trunk. Zero parameter and zero time cost. Set `enabled: false` for the single-stage comparison arm.
   enabled: true
   warmup_epochs: 20          # epochs of stage 1 (dense only); the rest of `optim.epochs` is stage 2
-  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop]
+  # Every sparse term that reads the site decoder or the centre head belongs here. `w_site_rank` and
+  # `w_site_margin` were missing until 2026-10-08 because the decoder was added after the staging was designed,
+  # and the cost is visible in the first `full` run with the decoder on: over three epochs site_rank falls
+  # 1.346 -> 0.101 and site_margin 0.92 -> 0.043 while the centre loss *rises* 1.159 -> 4.857 and site top-1
+  # collapses 0.757 -> 0.015. Both terms rank and separate sites whose centres come from a head held at zero, so
+  # they were being minimised against unsupervised positions -- satisfiable by collapsing the logits, and paid for
+  # by the trunk.
+  stage1_zero: [w_center, w_conf, w_listwise, w_size, w_prop, w_site_rank, w_site_margin]
 optim:
   lr: 0.0005
   weight_decay: 0.01
