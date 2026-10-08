@@ -115,7 +115,7 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
               probe_potential: bool = True, probe_model=None,
               probe_ligandable_frac: float = 0.5, probe_metal: bool = False,
               probe_electrostatic: bool = False, probe_conservation: bool = False,
-              conservation_dir: str | None = None) -> dict | None:
+              conservation_dir: str | None = None, probe_protrusion: bool = False) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable.
 
     `probe_model`: an optional per-point ligandability booster. Probes are the one component the ablation shows to
@@ -186,6 +186,18 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         trees_p = {k: (cKDTree(xyz[m]) if m.sum() else None) for k, m in types_p.items()}
         cnt_p, dmin, avail = pf.point_potential(ppos, trees_p)
         feat_probe = np.concatenate([feat_probe, avail, dmin / 6.0, np.log1p(cnt_p) / 3.0], 1).astype(np.float32)
+    if probe_protrusion:
+        # P2Rank's protrusion -- the number of *all* protein atoms within 10 A of the point -- is the single most
+        # important of its 35 features (RF importance 0.0845 against 0.0139 for the runner-up); protrusion alone
+        # reaches COACH420 Top-n 64.2 against 71.4 for the full set, and removing it costs 10.9 Top-n points on
+        # COACH420 against 1.9 on HOLO4K. Our probe channels stop at 8 A, and the long radius is not redundant
+        # with the closure field: measured on 268 structures and 8039 candidates of our own detector, the
+        # correct-against-decoy AUC of a single count is 0.650 at 8 A and 0.837 at 12 A against 0.755 for the
+        # 26-direction closure, and a logistic model on our existing four geometric inputs goes from 0.7999 to
+        # 0.8469 (5-fold CV) when the three long counts are added. log1p rather than a divisor because the counts
+        # run to the high hundreds and their useful variation is at the low end.
+        cnt_l = np.stack([np.array([len(x) for x in tree.query_ball_point(ppos, r)]) for r in (10.0, 12.0, 15.0)], 1)
+        feat_probe = np.concatenate([feat_probe, np.log1p(cnt_l).astype(np.float32) / 6.0], 1).astype(np.float32)
     if probe_metal:
         # Metals reach the network from `read_metals`, not from `read_pdb`: the parser keeps the polymer only, so
         # until now every ion in every training structure was discarded before featurisation. Ions are about 40 %
@@ -461,7 +473,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                 probe_potential: bool = True, probe_sampling: str = "tiered",
                 point_model_tag: str = "", probe_ligandable_frac: float = 0.5,
                 probe_metal: bool = False, probe_electrostatic: bool = False,
-                probe_conservation: bool = False, conservation_dir: str | None = None) -> list[str]:
+                probe_conservation: bool = False, conservation_dir: str | None = None,
+                probe_protrusion: bool = False) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent.
 
     `probe_sampling="ligandable"` places the probes by the per-point model instead of at random within each tier.
@@ -484,7 +497,7 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                point_model_tag=point_model_tag if probe_sampling == "ligandable" else "",
                probe_ligandable_frac=probe_ligandable_frac if probe_sampling == "ligandable" else None,
                probe_metal=probe_metal, probe_electrostatic=probe_electrostatic,
-               probe_conservation=probe_conservation,
+               probe_conservation=probe_conservation, probe_protrusion=probe_protrusion,
                conservation_dir=conservation_dir if probe_conservation else None,
                esm=esm_name, geometry=pf.geometry())
     sig_file = out_dir / ".featurisation.json"
@@ -552,7 +565,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                               probe_model=fold_models.get(int(r["fold"])),
                               probe_ligandable_frac=probe_ligandable_frac,
                               probe_metal=probe_metal, probe_electrostatic=probe_electrostatic,
-                              probe_conservation=probe_conservation, conservation_dir=conservation_dir)
+                              probe_conservation=probe_conservation, conservation_dir=conservation_dir,
+                              probe_protrusion=probe_protrusion)
                 if d is not None and "y_res" in d:
                     d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                     save(d, f); done.append(r["pdb"])

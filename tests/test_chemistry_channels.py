@@ -224,3 +224,26 @@ def test_build_cache_refuses_a_partial_conservation_set(tmp_path):
     d = tmp_path / "cons"; d.mkdir(); (d / "A.txt").write_text("0 1.0\n")
     with pytest.raises(FileNotFoundError, match="1 of 2"):
         D.build_cache(man, tmp_path, tmp_path / "cache", None, probe_conservation=True, conservation_dir=str(d))
+
+
+def test_protrusion_adds_three_long_range_counts(tmp_path):
+    """The one addition with a measurement of ours behind it; the test pins that it is actually long-ranged."""
+    pytest.importorskip("torch")
+    from training.pockets import data as D
+    f = charged_pocket_pdb(tmp_path)
+    kw = dict(n_probe=48, n_surf=24)
+    base = D.featurize(f, None, None, **kw)
+    got = D.featurize(f, None, None, probe_protrusion=True, **kw)
+    k = base["feat_probe"].shape[1]
+    assert got["feat_probe"].shape[1] == k + 3
+    long = got["feat_probe"][:, k:]
+    assert np.isfinite(long).all() and (long > 0).all()
+    assert (long[:, 0] <= long[:, 1] + 1e-6).all() and (long[:, 1] <= long[:, 2] + 1e-6).all()   # 10 < 12 < 15 A
+    assert (long[:, 2] > long[:, 0]).any()                      # the radii are not all saturated on this structure
+
+
+def test_protrusion_is_in_the_cache_signature():
+    import inspect
+    from training.pockets import data as D
+    assert "probe_protrusion=probe_protrusion" in inspect.getsource(D.build_cache).split("sig_file")[0]
+    assert "probe_protrusion" in inspect.signature(D.featurize).parameters

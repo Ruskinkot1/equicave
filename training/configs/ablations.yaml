@@ -51,6 +51,15 @@ ablations:
   # is a slot with its featurisation and its tests, not a measured result. PRANK's counter-argument stands and
   # should be checked if this ever runs: conservation will penalise cryptic and allosteric pockets by construction.
   probe_conservation: {data.probe_conservation: true}
+  # The one addition backed by a measurement of ours rather than by someone else's paper. P2Rank's protrusion is
+  # the number of all protein atoms within 10 A of the point, its most important feature by a factor of six, and
+  # removing it costs 10.9 Top-n points on COACH420 -- the benchmark where our own first-rank deficit is. Our probe
+  # channels stop at 8 A. Measured on 268 of our structures and 8039 candidates of our own detector: single-count
+  # correct-against-decoy AUC 0.650 at 8 A, 0.755 for the 26-direction closure, 0.837 at 12 A; a logistic model on
+  # our four existing geometric inputs goes 0.7999 -> 0.8224 with a 10 A count and -> 0.8469 with 10, 12 and 15.
+  # That is a proxy -- candidate discrimination, not top-1 -- so it does not transfer one for one, but it is the
+  # largest measured headroom of anything in these four arms.
+  probe_protrusion: {data.probe_protrusion: true}
   # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
   # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.

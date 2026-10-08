@@ -76,6 +76,9 @@ GROUPS = {
     # Chemistry: `no_probe_potential` first on purpose. It asks whether the chemistry already in the model does any
     # work; if it does not, an addition that supplies more of the same has no reason to help either.
     "chemistry":    ["no_probe_potential", "probe_metal", "probe_electrostatic", "probe_chemistry"],
+    # Geometry we lack rather than chemistry we duplicate; `probe_protrusion` leads because it is the only
+    # addition with a measurement of ours behind it (see training/configs/ablations.yaml).
+    "inputs":       ["probe_protrusion", "no_probe_potential", "probe_metal", "probe_electrostatic"],
     "capacity":     ["small", "deep", "wide", "big"],
     "scale":        ["scale_max", "scale_max_big"],
 }

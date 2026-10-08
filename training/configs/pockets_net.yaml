@@ -19,6 +19,10 @@ data:
   # signal with a measured effect on train-dissimilar structures, and the one that needs an alignment per target --
   # nothing here produces one, so the arm fails loudly rather than training on zeros if the files are absent.
   probe_conservation: false
+  # Atom counts at 10, 12 and 15 A: P2Rank's protrusion, which our probe channels stop short of at 8 A. Of the four
+  # additions this is the one our own measurement backs (0.7999 -> 0.8469 candidate AUC), so it is the one to run
+  # first -- but it is still measured as an addition rather than switched on untested.
+  probe_protrusion: false
   conservation_dir: data/conservation   # one `<pdb>.txt` per structure: `residue_index score`, as P2Rank reads it
   # Where the probes go. The first trained ablation says probes are the architecture: removing them costs 0.263
   # site top-1, while the surface module, the language model, the degree-2 channels and chirality are all within

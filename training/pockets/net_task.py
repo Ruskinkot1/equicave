@@ -444,7 +444,7 @@ def run(a) -> int:
                        dc.get("probe_sampling", "tiered"), dc.get("point_model_tag", ""),
                        dc.get("probe_ligandable_frac", 0.5), dc.get("probe_metal", False),
                        dc.get("probe_electrostatic", False), dc.get("probe_conservation", False),
-                       dc.get("conservation_dir"))
+                       dc.get("conservation_dir"), dc.get("probe_protrusion", False))
     files = [cache / f"{i}.npz" for i in ids]
     folds = {f: int(D.load(f)["fold"]) for f in files}
     if mode == "oof":                                   # one model per fold, features for the ranker on the held-out fold
