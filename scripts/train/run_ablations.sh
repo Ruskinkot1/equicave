@@ -79,6 +79,8 @@ GROUPS = {
     # Geometry we lack rather than chemistry we duplicate; `probe_protrusion` leads because it is the only
     # addition with a measurement of ours behind it (see training/configs/ablations.yaml).
     "inputs":       ["probe_protrusion", "no_probe_potential", "probe_metal", "probe_electrostatic"],
+    # The two levers with evidence, together and apart. Run this group first: it decides what `full` should be.
+    "baseline":     ["full_next", "noise_aug", "probe_protrusion"],
     "capacity":     ["small", "deep", "wide", "big"],
     "scale":        ["scale_max", "scale_max_big"],
 }

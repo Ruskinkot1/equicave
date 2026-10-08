@@ -7,6 +7,36 @@ after the fact is a lottery ticket rather than a finding.
 Baseline: `full` at site top-1 **0.843 ± 0.009** over three seeds (ablation of 2026-10-06, seeds 0.849 / 0.849 /
 0.831). Eleven arms in the grid.
 
+**Amended 2026-10-08, additively.** Five arms were added after the literature review (`probe_metal`,
+`probe_electrostatic`, `probe_chemistry`, `probe_conservation`, `probe_protrusion`) plus `full_next`. Nothing
+above is withdrawn or reworded; the baseline is unchanged and still `full` at 0.843 ± 0.009. Two consequences,
+both recorded here rather than discovered later:
+
+* **The threshold still holds, with less room.** Sixteen arms at σ 0.009 put the expected maximum of pure noise at
+  about +0.017 against +0.015 for eleven. Still under +0.02, so the rule below stands unaltered — but it would not
+  survive many more arms, and that is now a reason to stop adding them rather than a footnote.
+* **The promotion rule for `full_next`.** `full_next` bundles noise augmentation with the protrusion channels. If
+  it beats `full` by **≥ +0.02 on three seeds**, it becomes the baseline and every arm is re-run against it; the
+  single-change arms (`noise_aug`, `probe_protrusion`) then say which half earned it. Below +0.02 the defaults do
+  not move. The defaults were deliberately **not** flipped when these levers were implemented, because changing
+  `full` mid-grid would leave no arm comparable to the reference recorded above.
+
+Predictions for the six new arms, written now and before any of them has run: `probe_protrusion` **+0.01 to
++0.03** (the only one with a measurement of ours behind it: candidate-discrimination AUC 0.7999 → 0.8469, which
+is a proxy and will not transfer one for one); `full_next` **+0.02 to +0.08**, carried mostly by the augmentation;
+`probe_metal` **+0.00 to +0.02** (bounded by our own measurement: a metal is within 5 Å of 13.4 % of correct
+candidates against 1.8 % of decoys, but the AUC of that distance alone is 0.544, which caps the arm near 0.034
+even if it fixed every metal-bearing error); `probe_electrostatic` **0.000 ± 0.01, predicted null** — the
+ionisable-group distances and counts are already in `probe_potential`, so this is the fourth redundancy arm;
+`probe_chemistry` no more than the better of its two halves; `probe_conservation` **not run** — it needs an
+alignment per target and nothing in this repository produces one.
+
+One prediction about the calibration block, which is a measurement rather than an arm: the sum-of-squares site
+ranking **will move** under temperature scaling, because that aggregate is not monotone-invariant, and the sign
+is genuinely unknown. No paper in this literature calibrates pocket scores and reports the effect on ranked
+success, so either sign is a result. A null there would also be informative: it would mean the head is already
+close enough to calibrated that the aggregate does not care.
+
 ## The threshold, fixed in advance
 
 With eleven arms and a seed standard deviation of 0.009, the expected maximum of eleven draws from noise alone

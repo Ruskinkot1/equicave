@@ -148,3 +148,28 @@ def summarize(per: pd.DataFrame, cols=("top1", "top3", "topN", "topN2", "mrr")) 
 
 def fmt(stat: dict) -> str:
     return f"{stat['mean']:.3f} [{stat['lo']:.3f}, {stat['hi']:.3f}]"
+
+
+def by_group(rr, groups: dict, score_col: str = "score", label_col: str = "label", id_col: str = "pdb",
+             cols=("top1", "top3", "topN", "topN2", "ceiling"), min_n: int = 10) -> dict:
+    """`per_structure` restricted to each named group of structure ids.
+
+    One aggregate number hides heterogeneity that is the actual finding: DeepDrug3D's shape-only ablation loses
+    about 0.13 on nucleotide pockets and nothing on haem pockets, and our own metal measurement is a 7.3x
+    enrichment that yields an AUC of 0.544 -- both invisible in a mean over all structures. No paper in this
+    literature stratifies a site-prediction result by pocket chemical class, so this is reported alongside the
+    aggregate rather than instead of it.
+
+    Groups smaller than `min_n` structures are returned with their count and no metrics: at n < 10 the standard
+    error on a success rate is wider than any effect we could claim.
+    """
+    out = {}
+    for name, ids in groups.items():
+        sub = rr[rr[id_col].isin(set(ids))]
+        n = sub[id_col].nunique()
+        if n < min_n:
+            out[name] = dict(n=int(n))
+            continue
+        per = per_structure(sub, score_col, label_col=label_col)
+        out[name] = dict(n=int(n), **{k: float(per[k].mean()) for k in cols if k in per})
+    return out

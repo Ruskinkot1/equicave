@@ -84,6 +84,14 @@ model:
   # Three accurate methods, three rules, no published comparison -- in every one of them it is a hyperparameter
   # rather than an ablation. The default is P2Rank's, being the rule the strongest ranker uses.
   site_agg: sum_sq           # sum_sq | mean | max | sum
+eval:
+  # Post-hoc temperature scaling of the occupancy head. Reported two ways: what one scalar does to the head's ECE,
+  # and -- the number that does not exist in this literature -- what it does to a sum-of-squares site ranking.
+  # Calibration cannot change a ranking by max or mean, because temperature is monotone, but sum of squares is not
+  # monotone-invariant, and sum of squares is the rule P2Rank ranks with and our own `site_agg` default. The
+  # temperature is fitted on a hash-split half of the structures and reported on the other half.
+  calibrate: true
+  calibration_fit_frac: 0.5
 loss:
   hungarian: true            # one-to-one matching of proposals to sites (false = nearest-probe form, for the ablation)
   mask_frac: 0.15            # self-supervised masked-residue task

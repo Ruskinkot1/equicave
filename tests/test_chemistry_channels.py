@@ -247,3 +247,81 @@ def test_protrusion_is_in_the_cache_signature():
     from training.pockets import data as D
     assert "probe_protrusion=probe_protrusion" in inspect.getsource(D.build_cache).split("sig_file")[0]
     assert "probe_protrusion" in inspect.signature(D.featurize).parameters
+
+
+# --- calibration and stratified reporting --------------------------------------------------------------------------
+
+def test_temperature_recovers_a_known_overconfidence():
+    from equicave import calibration as CAL
+    from equicave.metrics import ece
+    rng = np.random.default_rng(0)
+    z = rng.normal(0, 2, 200_000)
+    y = rng.random(200_000) < 1 / (1 + np.exp(-z))
+    logit = z * 2.5                                          # the model is over-confident by a factor of 2.5
+    t = CAL.temperature(logit, y)
+    assert 2.3 < t < 2.7 and not CAL.at_bound(t)
+    assert ece(y, CAL.apply(logit, t)) < 0.1 * ece(y, CAL.apply(logit, 1.0))
+
+
+def test_temperature_is_one_when_there_is_nothing_to_fit():
+    from equicave import calibration as CAL
+    assert CAL.temperature(np.zeros(10), np.zeros(10)) == 1.0      # one class only
+    assert CAL.temperature(np.zeros(0), np.zeros(0)) == 1.0
+
+
+def test_at_bound_flags_a_boundary_value():
+    from equicave import calibration as CAL
+    assert CAL.at_bound(20.0) and CAL.at_bound(0.05) and not CAL.at_bound(1.4)
+
+
+def test_split_ids_is_deterministic_and_disjoint():
+    from equicave import calibration as CAL
+    ids = [f"p{i}" for i in range(500)]
+    a1, b1 = CAL.split_ids(ids); a2, b2 = CAL.split_ids(list(reversed(ids)))
+    assert a1 == a2 and b1 == b2                              # not a function of file order
+    assert not (a1 & b1) and len(a1 | b1) == len(ids)
+    assert 0.4 < len(a1) / len(ids) < 0.6
+
+
+def test_sumsq_ranking_is_not_invariant_under_temperature():
+    """The premise of the whole calibration measurement: a monotone map changes a sum-of-squares ordering."""
+    from equicave import calibration as CAL
+    pos = np.array([[0.0, 0, 0], [1.0, 0, 0], [2.0, 0, 0],            # site A: two confident probes
+                    [20.0, 0, 0], [21.0, 0, 0], [22.0, 0, 0], [23.0, 0, 0], [24.0, 0, 0]])  # site B: many lukewarm
+    occ_logit = np.array([3.0, 3.0, 3.0, -0.5, -0.5, -0.5, -0.5, -0.5])
+    conf = np.array([1.0, 0.1, 0.1, 0.9, 0.1, 0.1, 0.1, 0.1])
+    center = pos.copy()
+    sharp = CAL.sumsq_sites(CAL.apply(occ_logit, 0.2), pos, conf, center)[0][0]
+    soft = CAL.sumsq_sites(CAL.apply(occ_logit, 8.0), pos, conf, center)[0][0]
+    assert not np.allclose(sharp, soft)                       # the winning site changes with the temperature
+    assert sharp[0] < 10.0 and soft[0] > 10.0                 # sharpening favours the few-confident site
+
+
+def test_by_group_reports_counts_and_skips_small_groups():
+    import pandas as pd
+    from equicave import metrics as MT
+    rows = []
+    for i in range(30):
+        for k in range(3):
+            rows.append(dict(pdb=f"p{i}", cluster30=f"c{i}", n_sites=1, rank=k + 1,
+                             score=1.0 - k * 0.1, label=int(k == 0 and i % 2 == 0)))
+    rr = pd.DataFrame(rows)
+    out = MT.by_group(rr, {"big": [f"p{i}" for i in range(30)], "small": ["p0", "p1"]})
+    assert out["small"] == {"n": 2}                           # below min_n: count only, no claimable metric
+    assert out["big"]["n"] == 30 and out["big"]["top1"] == pytest.approx(0.5)
+
+
+def test_evaluate_reports_both_blocks(tmp_path):
+    torch = pytest.importorskip("torch")
+    import tests.test_training as T
+    from training.pockets import net_task as NT
+    files, cfg = T._tiny_cache(tmp_path, n=8)
+    r = NT.train_one(cfg, files[:4], files[4:], torch.device("cpu"), tmp_path, log=lambda s: None)
+    ev = NT.evaluate(r["model"], files, torch.device("cpu"), cfg, log=lambda s: None)
+    assert "net_sites_by_class" in ev and "net_sites_dcc4_by_class" in ev
+    c = ev["calibration"]
+    assert c["n_fit"] + c["n_report"] == 8 and c["n_fit"] > 0 and c["n_report"] > 0
+    assert "occ_ece_raw" in c and "occ_ece_calibrated" in c and "temperature_at_bound" in c
+    assert len(c["reliability_calibrated"]) == 10
+    cfg2 = dict(cfg); cfg2["eval"] = {"calibrate": False}
+    assert "calibration" not in NT.evaluate(r["model"], files, torch.device("cpu"), cfg2, log=lambda s: None)

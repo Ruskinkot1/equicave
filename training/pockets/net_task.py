@@ -174,12 +174,85 @@ def net_features(out, probe_pos, centers: np.ndarray, r: float = 4.0, radii=(4.0
     return rows
 
 
+def stratified_sites(rank_rows: list, per_struct: list) -> dict:
+    """Site metrics split by the chemical class of the structure's sites, alongside the aggregate.
+
+    The classes are the label vector we already predict (`labels.PROPERTY_CLASSES`), so this costs nothing and
+    needs no new annotation. A structure joins a class if any of its sites carries it, which is the right rule for
+    a per-structure success metric: with two sites of different classes, getting either one first is a success for
+    both classes, and splitting the credit would invent a per-site metric the benchmark does not use.
+    """
+    from equicave import labels as LB, metrics as MT
+    keep = ["nucleotide", "heme", "peptide", "carbohydrate", "lipid", "metal",
+            "polar", "apolar", "charged_ligand", "aromatic_ligand", "buried_deep", "buried_shallow",
+            "size_small", "size_large"]
+    groups = {}
+    for name in keep:
+        if name not in LB.PROPERTY_CLASSES:
+            continue
+        j = LB.PROPERTY_CLASSES.index(name)
+        groups[name] = [r["pdb"] for r in per_struct
+                        if r["prop"] is not None and len(r["prop"]) and np.asarray(r["prop"])[:, j].any()]
+    rr = pd.DataFrame(rank_rows)
+    out = {"net_sites_by_class": MT.by_group(rr, groups),
+           "net_sites_dcc4_by_class": MT.by_group(rr, groups, label_col="label_dcc")}
+    return out
+
+
+def calibration_block(per_struct: list, cfg: dict) -> dict:
+    """Temperature-scale the occupancy head, and measure what that does to a sum-of-squares site ranking.
+
+    Two numbers that do not exist in this literature. The first is plain: how badly calibrated the per-probe
+    occupancy head is, and how much one scalar fixes it. The second is the one worth having -- calibration cannot
+    change a ranking by maximum or mean, because temperature is monotone, but P2Rank ranks a cluster by the **sum
+    of the squares** of its per-point ligandability and that aggregate is not monotone-invariant. So the sum_sq
+    ranking is recomputed with and without the temperature, on structures the temperature was not fitted on.
+
+    The fit/report split is by a hash of the structure id, never by file order, so the temperature is never fitted
+    on the half its effect is reported on.
+    """
+    from equicave import calibration as CAL, metrics as MT
+    frac = float(cfg.get("eval", {}).get("calibration_fit_frac", 0.5))
+    fit_ids, rep_ids = CAL.split_ids([r["pdb"] for r in per_struct], frac)
+    fit = [r for r in per_struct if r["pdb"] in fit_ids]
+    rep = [r for r in per_struct if r["pdb"] in rep_ids]
+    if not fit or not rep:
+        return {"calibration": {"skipped": "not enough structures to split"}}
+    t = CAL.temperature(np.concatenate([r["occ_logit"] for r in fit]),
+                        np.concatenate([r["y_occ"] for r in fit]))
+    yr = np.concatenate([r["y_occ"] for r in rep]); lr = np.concatenate([r["occ_logit"] for r in rep])
+    out = {"calibration": dict(temperature=round(float(t), 4), temperature_at_bound=CAL.at_bound(t),
+                               n_fit=len(fit), n_report=len(rep),
+                               occ_ece_raw=MT.ece(yr, CAL.apply(lr, 1.0)),
+                               occ_ece_calibrated=MT.ece(yr, CAL.apply(lr, t)),
+                               reliability_calibrated=CAL.reliability(yr, CAL.apply(lr, t)))}
+    rows = {1.0: [], t: []}
+    for r in rep:
+        for temp in rows:
+            ctr, sc = CAL.sumsq_sites(CAL.apply(r["occ_logit"], temp), r["probe_pos"], r["conf"], r["center"])
+            for k, (cc, ss) in enumerate(zip(ctr, sc), 1):
+                dca = float(np.linalg.norm(r["lig"] - cc, axis=1).min())
+                dcc = float(np.linalg.norm(r["sites"] - cc, axis=1).min()) if len(r["sites"]) else float("inf")
+                rows[temp].append(dict(pdb=r["pdb"], cluster30=r["cluster30"], n_sites=r["n_sites"], rank=k,
+                                       score=float(ss), label=int(dca <= 4.0), label_dcc=int(dcc <= 4.0)))
+    for name, temp in (("sumsq_raw", 1.0), ("sumsq_calibrated", t)):
+        if not rows[temp]:
+            continue
+        per = MT.per_structure(pd.DataFrame(rows[temp]), "score")
+        out["calibration"][name] = {k: float(per[k].mean()) for k in ("top1", "top3", "topN", "topN2", "ceiling")}
+    if "sumsq_raw" in out["calibration"] and "sumsq_calibrated" in out["calibration"]:
+        out["calibration"]["sumsq_top1_delta"] = round(
+            out["calibration"]["sumsq_calibrated"]["top1"] - out["calibration"]["sumsq_raw"]["top1"], 4)
+    return out
+
+
 def evaluate(model, files, device, cfg, log=print) -> dict:
     import torch
     from equicave import metrics as MT
     ys = {k: [] for k in ("res", "occ")}; ps = {k: [] for k in ("res", "occ")}
     yh, ph, yp, pp, yprox = [], [], [], [], []
     rank_rows = []
+    per_struct = []            # what the calibration and stratification blocks below need, one record per structure
     model.eval()
     with torch.no_grad():
         for f in files:
@@ -191,8 +264,15 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
                 yprox.append(d["y_hot_proximity"])
             if "prop_logit" in out:
                 yp.append(d["y_prop"]); pp.append(torch.sigmoid(out["prop_logit"]).cpu().numpy())
-            c, conf = predict_sites(out, d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]])
+            probe_pos = d["pos"][d["n_res"]:d["n_res"] + d["n_probe"]]
+            c, conf = predict_sites(out, probe_pos)
             L = d["lig_xyz"]; sites = d["site_centers"]; n_sites = len(sites)
+            per_struct.append(dict(
+                pdb=d["pdb"], cluster30=str(d.get("cluster30", d["pdb"])), n_sites=n_sites,
+                occ_logit=out["occ_logit"].detach().cpu().numpy().ravel(), y_occ=d["y_occ"],
+                probe_pos=probe_pos, conf=torch.sigmoid(out["conf_logit"]).detach().cpu().numpy().ravel(),
+                center=out["center"].detach().cpu().numpy(), lig=L, sites=sites,
+                prop=d["y_prop"] if "y_prop" in d else None))
             for k, ctr in enumerate(c, 1):
                 dca = float(np.linalg.norm(L - ctr, axis=1).min())
                 dcc = float(np.linalg.norm(sites - ctr, axis=1).min()) if len(sites) else float("inf")
@@ -227,6 +307,10 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
             p_ = MT.per_structure(rr, "score", label_col=col)
             res[name] = {k: float(p_[k].mean()) for k in ("top1", "top3", "topN", "topN2", "ceiling")}
         res["net_center_error_median"] = float(rr.groupby("pdb")["dcc"].min().median())
+    if per_struct:
+        res.update(stratified_sites(rank_rows, per_struct))
+        if cfg.get("eval", {}).get("calibrate", True):
+            res.update(calibration_block(per_struct, cfg))
     res["val_score"] = select_score(res, cfg)
     return res
 

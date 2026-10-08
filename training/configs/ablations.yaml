@@ -60,6 +60,17 @@ ablations:
   # That is a proxy -- candidate discrimination, not top-1 -- so it does not transfer one for one, but it is the
   # largest measured headroom of anything in these four arms.
   probe_protrusion: {data.probe_protrusion: true}
+  # The candidate next baseline: the two levers that have evidence behind them, bundled. Augmentation is the
+  # largest clean number in this literature (+0.0976 PR-AUC against +0.0256 for 2.6x the training structures) and
+  # we currently augment by rotation only, which is a no-op against an equivariant model; protrusion is the only
+  # addition backed by a measurement of ours (candidate AUC 0.7999 -> 0.8469).
+  #
+  # Why this is an arm and not a change of defaults: every pre-registered prediction is written as a difference
+  # against `full` at 0.843 +- 0.009, so moving `full` would leave no arm comparable to the recorded reference and
+  # would quietly delete prediction 1, which is the one the document exists to test. The promotion rule is in
+  # docs/results/PREREGISTERED.md: clear +0.02 over `full` on three seeds and this becomes the baseline, with the
+  # grid re-run against it. A bundle cannot say which half won, which is why both single-change arms stay.
+  full_next: {optim.augment: {pos: 0.5, feat: 0.3, drop: 0.03}, data.probe_protrusion: true}
   # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
   # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.
