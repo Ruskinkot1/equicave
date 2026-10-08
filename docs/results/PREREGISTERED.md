@@ -7,6 +7,24 @@ after the fact is a lottery ticket rather than a finding.
 Baseline: `full` at site top-1 **0.843 ± 0.009** over three seeds (ablation of 2026-10-06, seeds 0.849 / 0.849 /
 0.831). Eleven arms in the grid.
 
+**Amendment 2026-10-08 (b): the baseline above is stale, and the reason is in this repository's own history.**
+Nothing is withdrawn, but no arm can be compared to 0.843 ± 0.009 until `full` is re-run, because that number was
+produced by a different model *and* read by a different rule:
+
+* The ablation table was committed at **10-06 07:07** (`8d0819d`) and the site decoder was added at **10-06 10:23**
+  (`7e1f7d3`), three hours later. So the reference `full` had **no site decoder**. An arm named
+  `no_site_decoder` is therefore not a removal from that reference -- it is the same architecture family.
+* The checkpoint-selection fix landed at **10-07 07:46** (`5d75854`). The reference numbers were selected by
+  `mean(occ_ap, res_ap)`, which cannot see site detection at all -- the bug that once reported top-1 0.022 for a
+  model that reached 0.868. The same training run, read by the current `select_score`, reports a higher top-1
+  without having trained any differently.
+
+So a post-fix arm beating 0.843 may be measuring the selection rule. The first run of the grid has to be `full`
+on the current commit, and the threshold applies to **(arm − that `full`)**, seed-matched, both at the same
+schedule. The +0.02 arithmetic is unaffected; what is void is the particular number the differences are taken
+against. Recorded here rather than quietly re-baselined, because a pre-registration that gets its reference
+swapped without saying so is not one.
+
 **Amended 2026-10-08, additively.** Five arms were added after the literature review (`probe_metal`,
 `probe_electrostatic`, `probe_chemistry`, `probe_conservation`, `probe_protrusion`) plus `full_next`. Nothing
 above is withdrawn or reworded; the baseline is unchanged and still `full` at 0.843 ± 0.009. Two consequences,
