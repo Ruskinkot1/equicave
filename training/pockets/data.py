@@ -483,6 +483,26 @@ FEATURISE_KEYS = ("k_scale", "require_interaction", "residue_chemistry", "probe_
                   "probe_ligandable_frac")
 
 
+# Signature keys added after caches already existed on disk, with the value whose arrays are identical to a cache
+# built before the key was introduced. An absent key therefore compares equal to this value, and only a
+# non-default value refuses the reuse.
+#
+# Without this, adding a flag that is *off by default* invalidates every cache in existence and every arm of the
+# grid dies at startup before training a single epoch -- which is what adding the four chemistry flags did on
+# 2026-10-08. A key missing from this table is still a hard difference when absent, which is the right default for
+# a key whose absence really does mean different arrays.
+SIG_DEFAULTS = {"probe_metal": False, "probe_electrostatic": False, "probe_conservation": False,
+                "probe_protrusion": False, "conservation_dir": None}
+_SIG_MISSING = object()
+
+
+def _sig_value(sig: dict, key: str):
+    """A signature's value for `key`, falling back to the neutral default for keys added later."""
+    if key in sig:
+        return sig[key]
+    return SIG_DEFAULTS.get(key, _SIG_MISSING)
+
+
 def featurisation_kwargs(dcfg: dict, point_model=None, log=None) -> dict:
     """The featurize() keyword arguments a trained model's own config asks for.
 
@@ -539,12 +559,18 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
     sig_file = out_dir / ".featurisation.json"
     if sig_file.exists():
         old_sig = json.loads(sig_file.read_text())
-        if old_sig != sig:
-            differs = sorted(k for k in set(old_sig) | set(sig) if old_sig.get(k) != sig.get(k))
+        differs = sorted(k for k in set(old_sig) | set(sig) if _sig_value(old_sig, k) != _sig_value(sig, k))
+        if differs:
             raise RuntimeError(
                 f"the cache at {out_dir} was built with a different featurisation and would be reused as is, so "
                 f"the run would measure the old one. Differs in: {differs}. Delete the directory to rebuild it, or "
                 f"point data.cache_dir at a new one (the arms that change featurisation each want their own).")
+        if old_sig != sig:
+            # Compatible but written before some of these keys existed. Rewriting it makes the next comparison
+            # exact instead of relying on the defaults again.
+            sig_file.write_text(json.dumps(sig, indent=1, sort_keys=True))
+            log(f"  the cache signature predates {sorted(set(sig) - set(old_sig))}; the arrays are the same at "
+                f"those defaults, so it is reused and the signature is updated")
     else:
         sig_file.write_text(json.dumps(sig, indent=1, sort_keys=True))
 

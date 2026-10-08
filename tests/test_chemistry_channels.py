@@ -402,3 +402,70 @@ def test_metal_channel_excludes_the_ligands_being_predicted(tmp_path):
     from training.pockets import data as D
     src = inspect.getsource(D.featurize)
     assert "exclude_comps=lig_codes" in src
+
+
+# --- the cache signature must not reject a cache it agrees with ----------------------------------------------------
+
+def _write_sig(d, **over):
+    import json
+    base = dict(n_probe=8, n_surf=4, k_scale=1.0, druglike_only=False, require_interaction=True,
+                residue_chemistry=True, probe_potential=True, probe_sampling="tiered", point_model_tag="",
+                probe_ligandable_frac=None, probe_metal=False, probe_electrostatic=False,
+                probe_conservation=False, probe_protrusion=False, conservation_dir=None, esm=None)
+    from equicave import pocket_features as pf
+    base["geometry"] = pf.geometry()
+    base.update(over)
+    (d / ".featurisation.json").write_text(json.dumps(base, indent=1, sort_keys=True))
+    return base
+
+
+def test_a_signature_predating_a_new_flag_is_still_reused(tmp_path):
+    """The regression this guards: adding an off-by-default flag killed every arm of the grid at startup.
+
+    A cache written before `probe_metal` existed holds exactly the arrays a cache written with
+    `probe_metal=False` would hold, so the absent key must compare equal to False rather than to nothing.
+    """
+    import json
+    from training.pockets import data as D
+    cache = tmp_path / "cache"; cache.mkdir()
+    sig = _write_sig(cache)
+    for k in ("probe_metal", "probe_electrostatic", "probe_conservation", "probe_protrusion", "conservation_dir"):
+        sig.pop(k, None)
+    (cache / ".featurisation.json").write_text(json.dumps(sig, indent=1, sort_keys=True))
+    man = tmp_path / "m.csv"; man.write_text("pdb,cluster30,fold,ligands\n")      # no rows: only the guard runs
+    said = []
+    D.build_cache(man, tmp_path, cache, None, n_probe=8, n_surf=4, log=said.append)
+    assert any("predates" in s for s in said)
+    now = json.loads((cache / ".featurisation.json").read_text())
+    assert now["probe_metal"] is False and "probe_protrusion" in now          # upgraded, so the next check is exact
+
+
+def test_a_signature_predating_a_flag_still_refuses_when_the_flag_is_on(tmp_path):
+    import json
+    from training.pockets import data as D
+    cache = tmp_path / "cache"; cache.mkdir()
+    sig = _write_sig(cache); sig.pop("probe_protrusion")
+    (cache / ".featurisation.json").write_text(json.dumps(sig, indent=1, sort_keys=True))
+    man = tmp_path / "m.csv"; man.write_text("pdb,cluster30,fold,ligands\n")
+    with pytest.raises(RuntimeError, match="probe_protrusion"):
+        D.build_cache(man, tmp_path, cache, None, n_probe=8, n_surf=4, probe_protrusion=True, log=lambda s: None)
+
+
+def test_a_real_featurisation_difference_is_still_refused(tmp_path):
+    from training.pockets import data as D
+    cache = tmp_path / "cache"; cache.mkdir()
+    _write_sig(cache, residue_chemistry=True)
+    man = tmp_path / "m.csv"; man.write_text("pdb,cluster30,fold,ligands\n")
+    with pytest.raises(RuntimeError, match="residue_chemistry"):
+        D.build_cache(man, tmp_path, cache, None, n_probe=8, n_surf=4, residue_chemistry=False, log=lambda s: None)
+
+
+def test_every_new_signature_key_has_a_neutral_default():
+    """A new off-by-default flag that is not in SIG_DEFAULTS repeats the outage, so the list is checked here."""
+    import inspect, json
+    from training.pockets import data as D
+    src = inspect.getsource(D.build_cache)
+    body = src.split("sig = dict(")[1].split("sig_file")[0]
+    keys = {k.strip() for k in __import__("re").findall(r"(\w+)=", body)}
+    for name in ("probe_metal", "probe_electrostatic", "probe_conservation", "probe_protrusion", "conservation_dir"):
+        assert name in keys and name in D.SIG_DEFAULTS
