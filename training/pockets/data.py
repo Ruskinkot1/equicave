@@ -114,7 +114,8 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
               require_interaction: bool = True, residue_chemistry: bool = True,
               probe_potential: bool = True, probe_model=None,
               probe_ligandable_frac: float = 0.5, probe_metal: bool = False,
-              probe_electrostatic: bool = False) -> dict | None:
+              probe_electrostatic: bool = False, probe_conservation: bool = False,
+              conservation_dir: str | None = None) -> dict | None:
     """All arrays of one structure (inputs + labels when ligands are given). None if the structure is unusable.
 
     `probe_model`: an optional per-point ligandability booster. Probes are the one component the ablation shows to
@@ -193,6 +194,24 @@ def featurize(pdb_path, lig_codes: set[str] | None, esm: np.ndarray | None, n_pr
         # ESM-2, surface and degree-2 arms all failed to have.
         md, mw = pf.point_metal(ppos, structure.read_metals(pdb_path))
         feat_probe = np.concatenate([feat_probe, md / 16.0, np.log1p(mw) / 2.0], 1).astype(np.float32)
+    if probe_conservation:
+        # The one external signal in this literature with a measured effect on train-dissimilar structures
+        # (P2Rank_CONS: top-(N+2) 53.9 % against 51.9 % on LIGYSIS, +346 true positives at a 100-false-positive
+        # budget, on a benchmark with 0.5-9.7 % training overlap) and the only one that cannot be leakage, since it
+        # is computed per target at inference from an alignment. The scores are read, not computed: an alignment
+        # against a UniRef-scale database costs more than the whole rest of this pipeline, and the file is the
+        # interface. Missing file is an error rather than zeros, or the arm would train on an empty channel and
+        # report it as a null.
+        from equicave import conservation as CONS
+        f_c = Path(conservation_dir or "") / f"{Path(pdb_path).stem}.txt"
+        sc = CONS.from_file(f_c, len(rt["resid"]))
+        if sc is None:
+            raise FileNotFoundError(f"probe_conservation needs per-residue scores at {f_c} "
+                                    f"(two columns, `residue_index score`, as P2Rank consumes them)")
+        rmap_c = {r: i for i, r in enumerate(rt["resid"])}
+        ra_c = np.array([rmap_c[r] for r in st["resid"]], int)
+        c_mean, c_max, c_cov = pf.point_conservation(ppos, xyz, ra_c, sc)
+        feat_probe = np.concatenate([feat_probe, np.stack([c_mean, c_max, c_cov], 1)], 1).astype(np.float32)
     e_fld = None
     if probe_electrostatic:
         e_pot, e_fld = pf.point_field(ppos, st, types_e)
@@ -441,7 +460,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                 require_interaction: bool = True, residue_chemistry: bool = True,
                 probe_potential: bool = True, probe_sampling: str = "tiered",
                 point_model_tag: str = "", probe_ligandable_frac: float = 0.5,
-                probe_metal: bool = False, probe_electrostatic: bool = False) -> list[str]:
+                probe_metal: bool = False, probe_electrostatic: bool = False,
+                probe_conservation: bool = False, conservation_dir: str | None = None) -> list[str]:
     """Featurise every manifest structure once; returns the list of cached ids. Idempotent.
 
     `probe_sampling="ligandable"` places the probes by the per-point model instead of at random within each tier.
@@ -464,6 +484,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                point_model_tag=point_model_tag if probe_sampling == "ligandable" else "",
                probe_ligandable_frac=probe_ligandable_frac if probe_sampling == "ligandable" else None,
                probe_metal=probe_metal, probe_electrostatic=probe_electrostatic,
+               probe_conservation=probe_conservation,
+               conservation_dir=conservation_dir if probe_conservation else None,
                esm=esm_name, geometry=pf.geometry())
     sig_file = out_dir / ".featurisation.json"
     if sig_file.exists():
@@ -480,6 +502,18 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
     rows = list(csv.DictReader(open(manifest_csv)))
     if limit:
         rows = rows[:limit]
+    if probe_conservation:
+        # Checked here and not per structure: a missing file raises inside `featurize`, where build_cache catches
+        # it and drops that structure, so an absent conservation directory would quietly shrink the dataset and
+        # the arm would be compared against the baseline on a different set of proteins.
+        d_c = Path(conservation_dir or "")
+        have = [r["pdb"] for r in rows if (d_c / f"{r['pdb']}.txt").exists()]
+        if len(have) < len(rows):
+            raise FileNotFoundError(
+                f"probe_conservation: {len(rows) - len(have)} of {len(rows)} manifest structures have no "
+                f"conservation file in {d_c or '<unset data.conservation_dir>'}. Expected one `<pdb>.txt` per "
+                f"structure, two columns `residue_index score`, in the residue order of the PDB file. This arm "
+                f"needs an alignment per target (UniRef-scale search); nothing in this repository produces one.")
     emb = Embedder(esm_name, device) if esm_name else None
     comps = sorted({l[0] for r in rows for l in json.loads(r["ligands"])})
     # Each component is one small download the first time it is seen; at full scale there are thousands of them.
@@ -517,7 +551,8 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                               residue_chemistry=residue_chemistry, probe_potential=probe_potential,
                               probe_model=fold_models.get(int(r["fold"])),
                               probe_ligandable_frac=probe_ligandable_frac,
-                              probe_metal=probe_metal, probe_electrostatic=probe_electrostatic)
+                              probe_metal=probe_metal, probe_electrostatic=probe_electrostatic,
+                              probe_conservation=probe_conservation, conservation_dir=conservation_dir)
                 if d is not None and "y_res" in d:
                     d["cluster30"] = r["cluster30"]; d["fold"] = int(r["fold"])
                     save(d, f); done.append(r["pdb"])

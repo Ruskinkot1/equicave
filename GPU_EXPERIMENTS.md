@@ -141,6 +141,11 @@ the field**, against 0.71 s for the rest of the featurisation. Both run once, in
 | `probe_metal` | 6 channels: distance to the nearest ion and occupancy-weighted count, per metal role | two methods carry a metal bit, **none ablates it**; ions are ≈40 % of LIGYSIS ligand sites, and removing them moves top-(N+2) by 5–10 points for every method but fpocket | **+0.01 to +0.03**, concentrated on the metal-bearing structures; near zero on COACH420, which has almost no ion sites by construction (P2Rank's ≥5-atom rule) |
 | `probe_electrostatic` | screened-Coulomb potential and ‖E‖ as scalars, **E as a degree-1 channel** | no comparison of a cheap Coulomb field against a PB solve as a network input exists for any of the three tasks; dMaSIF's result argues the solver is not worth paying for | **0 to +0.01, and a fourth null is the honest base case**: our ionisable-group distances and counts are already in `probe_potential`, so this may re-encode what the model has. Run for the number, not the hope |
 | `probe_chemistry` | both | — | whatever the two give separately; run to catch an interaction, not as the headline |
+| `probe_conservation` | 3 channels: weighted mean and max MSA conservation of the lining, and how much of it was scored | the only one of the four with controlled evidence on train-dissimilar structures: P2Rank_CONS, top-(N+2) 53.9 % against 51.9 % on LIGYSIS, +346 TP at a 100-FP budget, 0.5–9.7 % training overlap | **+0.01 to +0.02, and the most likely of the four to be real** — but it needs an alignment per target, which nothing here produces, so it is a slot and not a plan. At +2.0 points it also needs ≥5 seeds against sd 0.009 |
+
+One caveat that outranks all four rows, from the review itself: most published feature-ablation deltas in this
+literature are smaller than our own seed spread of 0.009. The binding constraint on "does channel X help?" is
+**statistical power, not feature design**, so a fourth seed on an existing arm buys more than a fifth channel.
 
 The order matters: `no_probe_potential` runs **first**. It asks whether the chemistry already in the model does any
 work. If removing 21 chemical channels costs nothing, an addition that supplies more chemistry has no reason to

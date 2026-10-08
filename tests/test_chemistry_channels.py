@@ -177,3 +177,50 @@ def test_the_arms_exist_and_are_additions():
     assert ab["probe_metal"] == {"data.probe_metal": True}
     assert ab["probe_electrostatic"] == {"data.probe_electrostatic": True}
     assert ab["probe_chemistry"] == {"data.probe_metal": True, "data.probe_electrostatic": True}
+
+
+# --- conservation ------------------------------------------------------------------------------------------------
+
+def test_point_conservation_weights_by_proximity_and_reports_coverage():
+    xyz = np.array([[0.0, 0, 0], [0, 0, 2.0], [10.0, 0, 0]])
+    res_of_atom = np.array([0, 1, 2])
+    scores = np.array([1.0, 0.0, np.nan])                   # the third residue is a gap in the alignment
+    mean, mx, cov = pf.point_conservation(np.array([[0.0, 0, 1.0], [10.0, 0, 1.0]]), xyz, res_of_atom, scores)
+    assert mean[0] == pytest.approx(0.5) and mx[0] == pytest.approx(1.0)
+    assert cov[0] == pytest.approx(1.0)
+    assert cov[1] == pytest.approx(0.0) and mean[1] == 0.0  # lining present but unscored: coverage says so
+    near, _, _ = pf.point_conservation(np.array([[0.0, 0, 0.5]]), xyz, res_of_atom, scores)
+    assert near[0] > mean[0]                                # closer to the conserved residue, so weighted higher
+
+
+def test_point_conservation_gap_is_dropped_not_imputed():
+    xyz = np.array([[0.0, 0, 0], [1.0, 0, 0]])
+    mean, mx, cov = pf.point_conservation(np.zeros((1, 3)), xyz, np.array([0, 1]), np.array([0.8, np.nan]))
+    assert mean[0] == pytest.approx(0.8) and cov[0] == pytest.approx(0.5)
+
+
+def test_conservation_channel_and_its_loud_failure(tmp_path):
+    pytest.importorskip("torch")
+    from training.pockets import data as D
+    from equicave import structure
+    f = charged_pocket_pdb(tmp_path)
+    rt = structure.residue_table(structure.read_pdb(f))
+    d = tmp_path / "cons"; d.mkdir()
+    (d / "charged.txt").write_text("".join(f"{i} {i % 5 / 4:.3f}\n" for i in range(len(rt["resid"]))))
+    kw = dict(n_probe=48, n_surf=24)
+    base = D.featurize(f, None, None, **kw)
+    got = D.featurize(f, None, None, probe_conservation=True, conservation_dir=str(d), **kw)
+    assert got["feat_probe"].shape[1] == base["feat_probe"].shape[1] + 3
+    with pytest.raises(FileNotFoundError):
+        D.featurize(f, None, None, probe_conservation=True, conservation_dir=str(tmp_path / "absent"), **kw)
+
+
+def test_build_cache_refuses_a_partial_conservation_set(tmp_path):
+    """The failure that matters: files for some structures, so the arm would train on a different protein set."""
+    pytest.importorskip("torch")
+    from training.pockets import data as D
+    man = tmp_path / "m.csv"
+    man.write_text("pdb,cluster30,fold,ligands\nA,c0,0,\"[[\"\"LIG\"\"]]\"\nB,c1,1,\"[[\"\"LIG\"\"]]\"\n")
+    d = tmp_path / "cons"; d.mkdir(); (d / "A.txt").write_text("0 1.0\n")
+    with pytest.raises(FileNotFoundError, match="1 of 2"):
+        D.build_cache(man, tmp_path, tmp_path / "cache", None, probe_conservation=True, conservation_dir=str(d))

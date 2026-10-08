@@ -421,3 +421,45 @@ def point_field(points: np.ndarray, st: dict, types: dict | None = None, cutoff:
         pot[i] = w.sum()
         fld[i] = -(w / r)[:, None].T @ (d / r[:, None])         # E = -grad phi, screening term dropped (<= 13 %)
     return pot, fld
+
+
+def point_conservation(points: np.ndarray, xyz: np.ndarray, res_of_atom: np.ndarray, scores: np.ndarray,
+                       radius: float = 8.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per point: distance-weighted mean conservation of the residues lining it, the maximum, and the coverage.
+
+    Returns (weighted mean [P], max [P], coverage [P]), each zero where no scored residue is within `radius`.
+
+    The weight is 1/r over the lining *atoms*, so a residue pressed against the point counts more than one across
+    the cavity, and a residue contributing several atoms counts more than one contributing a single tip. Residues
+    with no score are dropped rather than imputed -- a gap in an alignment is missing information -- and the third
+    output says how much of the lining was scored at all, so the network can learn to distrust the first two where
+    the alignment is thin instead of reading an unscored pocket as an unconserved one.
+
+    This is the only external signal in this literature with a measured effect on train-dissimilar structures
+    (P2Rank_CONS, +2.0 points of top-(N+2) on LIGYSIS), and the only one with no training-set dependence at all,
+    since it is computed per target at inference. What it costs is an alignment: a UniRef-scale search, which is
+    more expensive than everything else in this pipeline put together, and is why `scores` is an argument here
+    rather than something this function computes.
+    """
+    pts = np.atleast_2d(np.asarray(points, float))
+    n = len(pts)
+    mean = np.zeros(n, np.float32); mx = np.zeros(n, np.float32); cov = np.zeros(n, np.float32)
+    s = np.asarray(scores, float)
+    ok = np.isfinite(s)
+    if n == 0 or len(xyz) == 0 or not ok.any():
+        return mean, mx, cov
+    ra = np.asarray(res_of_atom, int)
+    scored = ok[np.clip(ra, 0, len(s) - 1)] & (ra >= 0) & (ra < len(s))
+    tree = cKDTree(xyz)
+    for i, nb in enumerate(tree.query_ball_point(pts, radius)):
+        if not nb:
+            continue
+        nb = np.asarray(nb, int)
+        good = nb[scored[nb]]
+        cov[i] = len(good) / len(nb)
+        if len(good) == 0:
+            continue
+        w = 1.0 / np.maximum(np.linalg.norm(xyz[good] - pts[i], axis=1), 1.0)
+        v = s[ra[good]]
+        mean[i] = float((v * w).sum() / w.sum()); mx[i] = float(v.max())
+    return mean, mx, cov

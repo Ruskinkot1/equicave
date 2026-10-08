@@ -42,6 +42,15 @@ ablations:
   probe_metal: {data.probe_metal: true}
   probe_electrostatic: {data.probe_electrostatic: true}
   probe_chemistry: {data.probe_metal: true, data.probe_electrostatic: true}
+  # The highest-evidence addition in the review and the one we cannot run here. P2Rank_CONS is worth +2.0 points of
+  # top-(N+2) on LIGYSIS at a 0.5-9.7 % training overlap, and conservation is computed per target at inference, so
+  # unlike every learned channel its contribution cannot be leakage -- which is exactly what the ESM-2 reversal
+  # (HonestAffinity: ESM wins by 0.019-0.034 on familiar splits, loses by 0.024-0.064 on leak-proof tiers) says a
+  # channel needs. The price is an alignment per target against a UniRef-scale database, which costs more than
+  # everything else in this pipeline; no MSA tool and no sequence database is present in this container, so the arm
+  # is a slot with its featurisation and its tests, not a measured result. PRANK's counter-argument stands and
+  # should be checked if this ever runs: conservation will penalise cryptic and allosteric pockets by construction.
+  probe_conservation: {data.probe_conservation: true}
   # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
   # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
   # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.

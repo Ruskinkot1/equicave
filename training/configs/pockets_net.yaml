@@ -15,6 +15,11 @@ data:
   # on and are measured as additions. They flip to true only on a gain that clears the pre-registered threshold.
   probe_metal: false           # 6 channels: nearest distance and occupancy-weighted count, per metal group
   probe_electrostatic: false   # screened-Coulomb potential and |E| as scalars, the field itself as a vector channel
+  # Per-probe MSA conservation: weighted mean, max and how much of the lining was scored at all. The one external
+  # signal with a measured effect on train-dissimilar structures, and the one that needs an alignment per target --
+  # nothing here produces one, so the arm fails loudly rather than training on zeros if the files are absent.
+  probe_conservation: false
+  conservation_dir: data/conservation   # one `<pdb>.txt` per structure: `residue_index score`, as P2Rank reads it
   # Where the probes go. The first trained ablation says probes are the architecture: removing them costs 0.263
   # site top-1, while the surface module, the language model, the degree-2 channels and chirality are all within
   # two seed standard deviations of zero. `ligandable` spends the probe budget by the per-point model's prediction
