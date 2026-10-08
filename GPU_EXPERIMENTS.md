@@ -138,10 +138,34 @@ the field**, against 0.71 s for the rest of the featurisation. Both run once, in
 
 | arm | what it adds | published prior | my expectation |
 |---|---|---|---|
-| `probe_metal` | 6 channels: distance to the nearest ion and occupancy-weighted count, per metal role | two methods carry a metal bit, **none ablates it**; ions are ≈40 % of LIGYSIS ligand sites, and removing them moves top-(N+2) by 5–10 points for every method but fpocket | **+0.01 to +0.03**, concentrated on the metal-bearing structures; near zero on COACH420, which has almost no ion sites by construction (P2Rank's ≥5-atom rule) |
+| `probe_metal` | 6 channels: distance to the nearest ion and occupancy-weighted count, per metal role | two methods carry a metal bit, **none ablates it**; ions are ≈40 % of LIGYSIS ligand sites, and removing them moves top-(N+2) by 5–10 points for every method but fpocket | **+0.00 to +0.02**, bounded by our own measurement below rather than by a guess; near zero on COACH420, which has almost no ion sites by construction (P2Rank's ≥5-atom rule) |
 | `probe_electrostatic` | screened-Coulomb potential and ‖E‖ as scalars, **E as a degree-1 channel** | no comparison of a cheap Coulomb field against a PB solve as a network input exists for any of the three tasks; dMaSIF's result argues the solver is not worth paying for | **0 to +0.01, and a fourth null is the honest base case**: our ionisable-group distances and counts are already in `probe_potential`, so this may re-encode what the model has. Run for the number, not the hope |
 | `probe_chemistry` | both | — | whatever the two give separately; run to catch an interaction, not as the headline |
 | `probe_conservation` | 3 channels: weighted mean and max MSA conservation of the lining, and how much of it was scored | the only one of the four with controlled evidence on train-dissimilar structures: P2Rank_CONS, top-(N+2) 53.9 % against 51.9 % on LIGYSIS, +346 TP at a 100-FP budget, 0.5–9.7 % training overlap | **+0.01 to +0.02, and the most likely of the four to be real** — but it needs an alignment per target, which nothing here produces, so it is a slot and not a plan. At +2.0 points it also needs ≥5 seeds against sd 0.009 |
+
+**Measured before spending GPU hours** (2026-10-08, 369 manifest structures, 762 correct candidates by the ≤4 Å
+rule against 10,300 decoys, `detect_sites` candidates, metals from `structure.read_metals`):
+
+| | at correct candidates | at decoys | ratio |
+|---|---|---|---|
+| a metal within 5 Å | 13.4 % | 1.8 % | **7.3×** |
+| a metal within 8 Å | 22.0 % | 4.6 % | **4.8×** |
+
+A candidate's base rate of being correct here is 6.9 %; conditioned on a metal within 5 Å it is **35.5 %**, a 5.2×
+lift. But the AUC of that distance *alone* is **0.544**, because 87 % of correct candidates have no metal near
+them: this is a sparse high-precision cue, not a ranker. The ceiling it implies, with the arithmetic stated so it
+can be argued with: the cue can only act on the 13.4 % of sites that have a metal within 5 Å, and only where the
+ranking is currently wrong, so at an error rate around 0.25 it is **≤ 0.034 top-1 even if it fixed every
+metal-bearing error**. It cannot close a −0.07 gap, and nothing in this group can.
+
+Also measured on the full manifest: 47.3 % of structures carry at least one metal atom, **26.5 % of sites have a
+metal within 8 Å of the centre** (16.9 % within 5 Å), and 96 of the 646 metal-bearing structures carry an ion
+below full occupancy — so the occupancy weighting in `point_metal` is acting on real data, not a hypothetical.
+
+The 7.3× enrichment that yields AUC 0.544 is the clearest argument in this file for **stratified reporting**: an
+aggregate DCC averages exactly this away, which is also what DeepDrug3D's split shows (+0.13 on nucleotide
+pockets, ~0 on heme). Stratifying the ablation table by pocket chemical class costs nothing and no paper in this
+literature does it.
 
 One caveat that outranks all four rows, from the review itself: most published feature-ablation deltas in this
 literature are smaller than our own seed spread of 0.009. The binding constraint on "does channel X help?" is
