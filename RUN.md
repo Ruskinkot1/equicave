@@ -183,10 +183,23 @@ python -m training pockets-net --config training/configs/mode_accurate.yaml --de
 python scripts/train/train_ranker.py --tag native2 --features-extra net --seeds 5 --model models/ranker_hybrid.txt
 
 # the ablation grid and its table (env vars, not positional arguments)
-DRY_RUN=1 GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh   # the plan and the cost first
-GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh
+DRY_RUN=1 bash scripts/train/run_ablations.sh      # the plan and the cost first; the default group is `core`
+bash scripts/train/run_ablations.sh                # 5 arms x 3 seeds = 15 runs
 python scripts/train/collect_ablations.py --runs runs/training/ablations --out docs/results/ablations.md
 ```
+
+**The grid is five arms, and that is the whole study.** `full` is the reference, `full_next` the candidate
+baseline, `no_site_decoder` the one mechanism no published method has, `no_probes` the headline claim worth 0.263,
+`no_tensors_matched` the ablation the field does not have. `training/configs/ablations.yaml` held 57 arms: at three
+seeds that is 171 runs and about 770 GPU hours, and the expected maximum of pure noise across 57 arms at a seed sd
+of 0.009 is **+0.026**, above this project's own +0.02 claim threshold — so that grid could not have supported a
+claim whatever it returned. 33 arms were deleted, twelve more kept as named open questions (`GROUP=chemistry`,
+`baseline`, `mechanisms`, `probes`, `architecture`), and the seven already published in the 2026-10-06 table kept
+only so those rows stay reproducible.
+
+Arms that change the featurisation the same way now **share one cache**, which is keyed by the `data.*` overrides
+rather than by the arm name: `full_next` and `probe_protrusion` were each rebuilding their own copy of the same
+1367 structures, over an hour apiece.
 
 Each run writes `runs/training/<tag>_fold<k>_seed<s>/` with `model.pt`, `history.json`, `metrics.json` and
 `model_card.json`. The first run also builds the feature cache (ESM-2 included), which later runs reuse.

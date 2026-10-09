@@ -178,7 +178,11 @@ def test_the_arms_exist_and_are_additions():
     assert net["probe_metal"] is False and net["probe_electrostatic"] is False     # `full` is still the reference
     assert ab["probe_metal"] == {"data.probe_metal": True}
     assert ab["probe_electrostatic"] == {"data.probe_electrostatic": True}
-    assert ab["probe_chemistry"] == {"data.probe_metal": True, "data.probe_electrostatic": True}
+    assert "probe_chemistry" not in ab          # deleted with the 33 arms: it could not say which half won anyway
+    core = (pathlib.Path(__file__).resolve().parents[1] / "scripts/train/run_ablations.sh").read_text()
+    assert 'CORE = ["full", "full_next", "no_site_decoder", "no_probes", "no_tensors_matched"]' in core
+    assert len(ab) < 30, f"the grid is back up to {len(ab)} arms; see the header of ablations.yaml"
+
 
 
 # --- conservation ------------------------------------------------------------------------------------------------

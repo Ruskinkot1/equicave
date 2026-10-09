@@ -71,39 +71,15 @@ group, arms_arg = sys.argv[1], sys.argv[2]
 cfg = yaml.safe_load(pathlib.Path("training/configs/ablations.yaml").read_text())["ablations"]
 # Priority groups. "full" always leads: every other arm is a difference against it.
 GROUPS = {
-    "decoder":      ["no_site_decoder", "no_site_margin", "no_site_rank", "site_layers_4", "probe_flow",
-                     "probe_flow_4"],
-    "probes":       ["probe_tiered", "no_probes", "lean"],
-    "equivariance": ["invariant_frames", "invariant_blind", "no_tensors_matched", "no_vectors_matched",
-                     "e3nn_l1", "e3nn_l2", "e3nn_l3"],
-    "mechanisms":   ["no_direction_loss", "no_listwise", "single_stage", "no_probe_potential"],
-    # Chemistry: `no_probe_potential` first on purpose. It asks whether the chemistry already in the model does any
-    # work; if it does not, an addition that supplies more of the same has no reason to help either.
-    "chemistry":    ["no_probe_potential", "probe_metal", "probe_electrostatic", "probe_chemistry"],
-    # Geometry we lack rather than chemistry we duplicate; `probe_protrusion` leads because it is the only
-    # addition with a measurement of ours behind it (see training/configs/ablations.yaml).
-    "inputs":       ["probe_protrusion", "no_probe_potential", "probe_metal", "probe_electrostatic"],
-    # The two levers with evidence, together and apart. Run this group first: it decides what `full` should be.
+    # Named sets for the open questions in section 2 of ablations.yaml. `full` always leads: every other arm is a
+    # difference against it. The capacity, scale, aggregator, attention-kernel and e3nn groups are gone with the
+    # arms they named -- see the header of that file for why.
+    "chemistry":    ["no_probe_potential", "probe_metal", "probe_electrostatic"],
     "baseline":     ["full_next", "noise_aug", "probe_protrusion"],
-    "architecture": ["no_edge_type", "het_mp", "gaussian_attn", "site_agg_mean", "site_agg_max"],
-    "capacity":     ["small", "deep", "wide", "big"],
-    "scale":        ["scale_max", "scale_max_big"],
+    "mechanisms":   ["no_direction_loss", "no_listwise", "single_stage"],
+    "probes":       ["probe_tiered", "no_probes"],
+    "architecture": ["no_edge_type", "het_mp"],
 }
-# The grid that earns its GPU hours. Five arms, because the paper makes four claims and one of them needs a
-# candidate baseline:
-#
-#   full                 the reference every difference is taken against
-#   full_next            augmentation + protrusion, the two additions with evidence behind them, bundled
-#   no_site_decoder      the listwise site decoder, our only mechanism no published method has
-#   no_probes            the headline claim, worth 0.263
-#   no_tensors_matched   the ablation the field does not have, parameter-matched, and now also a memory argument
-#
-# Everything else in ablations.yaml stays reachable by name but is **not** in the default grid, and that is a
-# correction rather than a tidy-up. At 57 arms and 3 seeds the grid was 171 runs, about 770 GPU hours, and --
-# worse than the time -- the expected maximum of pure noise across 57 arms at a seed sd of 0.009 is **+0.026**,
-# above this project's own +0.02 claim threshold. A grid that large cannot support any claim at all; it
-# manufactures a winner. Arms were added whenever a question came up instead of the question being decided, which
-# converted uncertainty into compute.
 CORE = ["full", "full_next", "no_site_decoder", "no_probes", "no_tensors_matched"]
 
 known = set(cfg)

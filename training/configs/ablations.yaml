@@ -1,174 +1,60 @@
-# Ablation presets: each entry overrides keys of pockets_net.yaml. Run: python -m training pockets-net --config training/configs/pockets_net.yaml --set ablation=<name>
+# Ablation arms. Three sections, and the split is the point.
+#
+# This file held 57 arms. At three seeds that is 171 runs and about 770 GPU hours, and the arithmetic is worse than
+# the time: across 57 arms the expected maximum of pure noise at a seed sd of 0.009 is +0.026, above this project's
+# own +0.02 claim threshold (docs/results/PREREGISTERED.md). A grid that size cannot support a claim; it
+# manufactures a winner. 33 arms were deleted rather than hidden -- capacity and width sweeps, the e3nn degree
+# sweep, the three aggregator variants, the attention-kernel variants, the scale arms and the rest. They were
+# questions converted into compute instead of being decided.
+#
+# Run: python -m training pockets-net --config training/configs/pockets_net.yaml --set ablation=<name>
+# Grid: GROUP=core bash scripts/train/run_ablations.sh   (the default, section 1 only)
 ablations:
+
+  # ---- 1. The core grid: these five run by default, 15 runs at three seeds
+  # the reference; every difference is taken against it
   full: {}
-  no_probes: {model.use_probes: false}
-  no_surface: {model.use_surface: false}
-  no_esm: {data.esm: null}
-  no_tensors: {model.use_tensors: false}            # degree <= 1 (vector channels only)
-  no_vectors: {model.use_vectors: false, model.invariant_mode: frames}   # no steerable channels, geometry in local frames
-  invariant_frames: {model.equivariant: false, model.invariant_mode: frames}   # fair: same geometry, scalarised in a local frame
-  invariant_blind: {model.equivariant: false, model.invariant_mode: distances}  # the usual confound: geometry removed as well
-  achiral: {model.chiral: false}
-  no_recycling: {model.recycles: 0}
-  no_sequence_edges: {model.n_edge_scalar: 0}
-  no_masked_residue: {loss.mask_frac: 0.0, loss.w_seq: 0.0}
-  nearest_probe_loss: {loss.hungarian: false}
-  no_residue_chemistry: {data.residue_chemistry: false}
-  no_probe_potential: {data.probe_potential: false, loss.w_potential: 0.0, loss.pot_mask_frac: 0.0}
-  # Chemistry the model does not have at all, each arm an *addition* rather than a removal, so `full` stays the
-  # model the pre-registered predictions were written against and these are measured against the +0.02 threshold.
-  #
-  # The literature review (reports/, research_notes/) is the reason these two and not the obvious third. Partial
-  # charges and a Poisson-Boltzmann solve are the obvious third, and the record argues against paying for them:
-  # Kalasanty, DeepSurf and Pafnucy all carry one partial-charge channel and **none of the three ablates it**; the
-  # one real feature-subset ablation with PB electrostatics is MaSIF-site, on interfaces, worth about 0.02 ROC AUC;
-  # and dMaSIF then removed the PB solve on the identical split, replaced it with a learned function of atom types
-  # and inverse distances, and went 0.85 -> 0.87 at about 1/1000 of the preprocessing cost (MaSIF's feature step is
-  # 19.69 +- 16.08 s per protein against a 36 ms dMaSIF forward pass). What nobody has run is the cheap middle:
-  #
-  #   * `probe_electrostatic` -- a screened Coulomb term from formal charges, no force field and no solver, under a
-  #     second per structure. Our own ionisable-group distances and counts are already in `probe_potential`, so this
-  #     arm is at genuine risk of being the fourth null: it may carry nothing those channels do not. It is worth one
-  #     run anyway because the comparison "cheap Coulomb field as a network input" has no published number at all.
-  #     The field goes in as a degree-1 channel, which is also the first input our vector channels get that is not
-  #     derived from the geometry they already see.
-  #   * `probe_metal` -- the one addition that is unambiguously *new information*: `structure.read_pdb` keeps the
-  #     polymer only, so every metal ion in every training structure has been discarded before featurisation.
-  #     Ions are about 40 % of ligand sites in LIGYSIS, and removing ion sites from it moves top-(N+2) recall by
-  #     5-10 points for every method but fpocket. Of the published site predictors, two carry a metal input bit and
-  #     none ablates it, so this measurement does not exist anywhere either.
-  #
-  # Each arm overrides `data.*`, so run_ablations.sh gives it its own feature cache automatically.
-  probe_metal: {data.probe_metal: true}
-  probe_electrostatic: {data.probe_electrostatic: true}
-  probe_chemistry: {data.probe_metal: true, data.probe_electrostatic: true}
-  # The highest-evidence addition in the review and the one we cannot run here. P2Rank_CONS is worth +2.0 points of
-  # top-(N+2) on LIGYSIS at a 0.5-9.7 % training overlap, and conservation is computed per target at inference, so
-  # unlike every learned channel its contribution cannot be leakage -- which is exactly what the ESM-2 reversal
-  # (HonestAffinity: ESM wins by 0.019-0.034 on familiar splits, loses by 0.024-0.064 on leak-proof tiers) says a
-  # channel needs. The price is an alignment per target against a UniRef-scale database, which costs more than
-  # everything else in this pipeline; no MSA tool and no sequence database is present in this container, so the arm
-  # is a slot with its featurisation and its tests, not a measured result. PRANK's counter-argument stands and
-  # should be checked if this ever runs: conservation will penalise cryptic and allosteric pockets by construction.
-  probe_conservation: {data.probe_conservation: true}
-  # The one addition backed by a measurement of ours rather than by someone else's paper. P2Rank's protrusion is
-  # the number of all protein atoms within 10 A of the point, its most important feature by a factor of six, and
-  # removing it costs 10.9 Top-n points on COACH420 -- the benchmark where our own first-rank deficit is. Our probe
-  # channels stop at 8 A. Measured on 268 of our structures and 8039 candidates of our own detector: single-count
-  # correct-against-decoy AUC 0.650 at 8 A, 0.755 for the 26-direction closure, 0.837 at 12 A; a logistic model on
-  # our four existing geometric inputs goes 0.7999 -> 0.8224 with a 10 A count and -> 0.8469 with 10, 12 and 15.
-  # That is a proxy -- candidate discrimination, not top-1 -- so it does not transfer one for one, but it is the
-  # largest measured headroom of anything in these four arms.
-  probe_protrusion: {data.probe_protrusion: true}
-  # The candidate next baseline: the two levers that have evidence behind them, bundled. Augmentation is the
-  # largest clean number in this literature (+0.0976 PR-AUC against +0.0256 for 2.6x the training structures) and
-  # we currently augment by rotation only, which is a no-op against an equivariant model; protrusion is the only
-  # addition backed by a measurement of ours (candidate AUC 0.7999 -> 0.8469).
-  #
-  # Why this is an arm and not a change of defaults: every pre-registered prediction is written as a difference
-  # against `full` at 0.843 +- 0.009, so moving `full` would leave no arm comparable to the recorded reference and
-  # would quietly delete prediction 1, which is the one the document exists to test. The promotion rule is in
-  # docs/results/PREREGISTERED.md: clear +0.02 over `full` on three seeds and this becomes the baseline, with the
-  # grid re-run against it. A bundle cannot say which half won, which is why both single-change arms stay.
-  full_next: {optim.augment: {pos: 0.5, feat: 0.3, drop: 0.03}, data.probe_protrusion: true}
-  # Heterogeneous message passing: the third element in this file with a controlled published number behind it
-  # (VN-EGNN, +0.02 to +0.05 DCC for separate virtual-node transforms, and null-to-harmful on 3 of 6 metrics
-  # without rich protein features -- ours are rich, which is the condition their result attaches). About 5.7 k
-  # parameters, zero-initialised, so the arm measures the gains and not an initialisation.
-  het_mp: {model.het_mp: true}
-  no_edge_type: {model.use_edge_type: false}
-  # How a site's member probes collapse into one score. Three accurate methods use three different rules and
-  # nobody has compared them: P2Rank sums the squares of its per-point ligandability and reports that PRANK tested
-  # the mean and rejected it, GrASP and VN-EGNN average, YuelPocket takes the peak. In every one of them it is a
-  # hyperparameter rather than an ablation, so these three arms are the comparison the field is missing. The
-  # default stays P2Rank's rule, being the one the strongest ranker uses.
-  site_agg_mean: {model.site_agg: mean}
-  site_agg_max: {model.site_agg: max}
-  site_agg_sum: {model.site_agg: sum}
-  # Parameter-matched arms. Switching use_tensors off also removes wt, 2*dim of edge input and 3*dim of gates, so
-  # the plain no_tensors arm is strictly smaller and `full - no_tensors` measures degree 2 *plus* capacity. These
-  # arms widen dim until the parameter count is within 2 % of full, so the comparison isolates the degree.
-  no_tensors_matched: {model.use_tensors: false, model.match_params: full}
-  no_vectors_matched: {model.use_vectors: false, model.invariant_mode: frames, model.match_params: full}
-  # Probe placement: the comparison arm for the only component the first trained ablation found to matter.
-  # Random placement within buriedness tiers halves the occupancy positive rate (0.133 against 0.230, measured on
-  # 19 structures), so this arm carries its own balancing weight. At the default 3.0 it would be under-weighted
-  # twofold and the comparison would measure class weighting as much as placement.
-  probe_tiered: {data.probe_sampling: tiered, loss.occ_pos_weight: 6.5}
-  # Does degree 2 do nothing, or does it do work our detector has already done? The first ablation measured
-  # `full - no_tensors` with the probes at full strength, where the closure field b(p) over the 26 lattice
-  # directions has already supplied the enclosure -- its l=0 moment is buriedness, its l=1 moment is which way
-  # the cavity opens, its l=2 moment is slot against cone. Anisotropy of pocket shape is a genuinely degree-2
-  # quantity; we simply compute it outside the network and hand it over as where the probes are. So a null there
-  # says nothing about degree 2 in general, only about degree 2 *given that operator*.
-  #
-  # These arms cross the two axes. Along one, how much enclosure the operator supplies: ligandable placement
-  # (full) > random within buriedness tiers (tiered) > none at all (no_probes). Along the other, whether the
-  # network carries degree 2. Parameter-matched on the tensor-free side, since dropping the tensors also drops
-  # wt, 2*dim of edge input and 3*dim of gates -- 23.5 % of the model -- while dropping the probes costs nothing.
-  #
-  # The prediction the reasoning makes: the gap from removing degree 2 grows as the operator supplies less. If it
-  # does, the finding is a mechanism -- degree 2 reconstructs enclosure when nothing else provides it -- and not a
-  # null. If the gap stays flat at zero, degree 2 is genuinely idle on this task however the work is divided, and
-  # that is worth stating as such. Either way the architecture keeps the channels: `use_tensors` stays on by
-  # default, because the answer depends on where the line between operator and model is drawn, and that line
-  # moves whenever placement becomes learned.
-  no_probes_no_tensors: {model.use_probes: false, model.use_tensors: false, model.match_params: full}
-  probe_tiered_no_tensors: {data.probe_sampling: tiered, loss.occ_pos_weight: 6.5,
-                            model.use_tensors: false, model.match_params: full}
-  # New mechanisms, each as a removal from the full model so the baseline is the one that ships.
-  no_direction_loss: {loss.w_dir: 0.0}              # P12: the dense cosine target on every probe near one site
-  no_listwise: {loss.w_listwise: 0.0}               # P2: the only term that orders probes within a structure
-  single_stage: {stages.enabled: false}             # P6: all terms on from epoch 1, the previous schedule
-  e3nn_l1: {model.backbone: e3nn, model.lmax: 1}    # with l2 and l3 below this is a real degree sweep
-  e3nn_l2: {model.backbone: e3nn, model.lmax: 2}
-  e3nn_l3: {model.backbone: e3nn, model.lmax: 3}
-  # The site decoder, each piece as a removal so the baseline is the model that ships. The decoder is the answer to
-  # a measured failure rather than a guess, so these three arms are the ones that decide whether the diagnosis was
-  # right: if `no_site_decoder` matches `full`, pocket-against-pocket comparison is not what was missing.
-  no_site_decoder: {model.site_decoder: false}        # back to per-probe confidence, the previous ranking
-  no_site_margin: {loss.w_site_margin: 0.0}           # keep the listwise term, drop the one comparison top-1 decides
-  no_site_rank: {loss.w_site_rank: 0.0}               # keep the margin, drop the listwise term over sites
-  site_layers_4: {model.site_layers: 4}               # is two layers of competition enough
-  # Probe motion: one jump onto the predicted centre against several steps along the predicted direction.
-  probe_flow: {model.probe_update: flow}
-  probe_flow_4: {model.probe_update: flow, model.recycles: 4}
-  # The attention kernel, which is a layer-family change and not a symmetry one. The symmetry question is already
-  # answered against itself: removing degree-2 costs -0.006 and removing chirality +0.000, so neither a higher
-  # degree nor a change of group is where the gain is. What the current literature does report is the shape of the
-  # attention. Wang et al. 2026 measure +3.3 % DCC from this kernel alone on a GotenNet backbone like ours.
-  gaussian_attn: {model.attn_kernel: gaussian}
-  gaussian_attn_4: {model.attn_kernel: gaussian, model.layers: 4}
-  # Augmentation, at the published sigmas. The one clean data-versus-augmentation experiment in this field puts
-  # noise at about four times the value of 2.6x the training structures, and we currently augment only by
-  # rotation, which an equivariant model is invariant to by construction -- so we are not augmenting at all.
-  noise_aug: {optim.augment: {pos: 0.5, feat: 0.3, drop: 0.03}}
-  noise_aug_pos: {optim.augment: {pos: 0.5, feat: 0.0, drop: 0.0}}    # which of the three carries it
-  # The aggregator, parameter-matched by construction. This is the comparison the field has never run: the three
-  # accurate methods use sum-of-squares, mean and max respectively and none of them ablates the choice.
-  agg_mean: {model.site_agg: mean}                  # GrASP's and VN-EGNN's rule
-  agg_max: {model.site_agg: max}                    # YuelPocket's
-  agg_sum: {model.site_agg: sum}                    # the unsquared control, to separate the sum from the square
-  # Spend the parameters where the measurement says they work: no degree-2 channels, no chirality, no surface
-  # module, no language model -- all four were within seed noise -- and the saving reinvested in depth and probes.
-  # This is the model the ablation argues for, and it is a prediction that can fail.
-  lean:
-    model.use_tensors: false
-    model.chiral: false
-    model.use_surface: false
-    data.esm: null
-    model.layers: 7
-    data.n_probe: 1024
-  # Capacity. Every reduction measured so far came out neutral or slightly positive -- no_tensors 0.849, no_esm
-  # 0.853, no_surface 0.854 against full's 0.843 -- so the prior is that 4.39 M parameters is already past what
-  # 1367 structures in 1017 clusters can use, and these arms exist to confirm or refute that rather than to be
-  # assumed. Read them together with `scale_max` below: if capacity only pays at more data, that is the finding.
-  wide: {model.dim: 192}                            # 9.8 M parameters, 2.2x
-  deep: {model.layers: 8}                           # 6.7 M, 1.5x
-  big: {model.dim: 192, model.layers: 8}            # 14.8 M, 3.4x
-  small: {model.dim: 96, model.layers: 4}           # the other direction, which the ablation suggests may be free
-  # Data, which is the lever the measurements actually point at. The ranker saturated at 8x data (+0.008 top-1)
-  # but the network has never been trained on more than the small manifest even once. Needs its own cache, which
-  # run_ablations.sh gives it automatically because the arm touches data.*.
-  scale_max: {data.manifest: data/processed/manifest_max.csv}
-  scale_max_big: {data.manifest: data/processed/manifest_max.csv, model.dim: 192, model.layers: 8}
+  # candidate baseline: noise augmentation (+0.0976 PR-AUC published) and the protrusion channels (candidate AUC 0.7999 -> 0.8469, ours), bundled
+  full_next: {"optim.augment": {"pos": 0.5, "feat": 0.3, "drop": 0.03}, "data.probe_protrusion": true}
+  # the one mechanism no published method has. First reading: +0.007 at one seed, a third of the threshold
+  no_site_decoder: {"model.site_decoder": false}
+  # the headline claim, worth 0.263 -- the only component with a large measured effect
+  no_probes: {"model.use_probes": false}
+  # the ablation the field does not have, parameter-matched. Also a memory argument: the degree-2 edge messages are [E, F, 3, 3]
+  no_tensors_matched: {"model.use_tensors": false, "model.match_params": "full"}
+
+  # ---- 2. Open questions, by name only. Each costs ~4 h per seed, so each needs a reason that day.
+  # the single half of full_next with published evidence; run only if full_next wins and you need to know which half
+  noise_aug: {"optim.augment": {"pos": 0.5, "feat": 0.3, "drop": 0.03}}
+  # the other half, the one backed by our own measurement
+  probe_protrusion: {"data.probe_protrusion": true}
+  # does the chemistry already in the model do any work? Answer this before adding more
+  no_probe_potential: {"data.probe_potential": false, "loss.w_potential": 0.0, "loss.pot_mask_frac": 0.0}
+  # all terms from epoch 1. If it ties, the whole staging apparatus is unnecessary
+  single_stage: {"stages.enabled": false}
+  # random placement within buriedness tiers; carries its own occ_pos_weight or the comparison is confounded
+  probe_tiered: {"data.probe_sampling": "tiered", "loss.occ_pos_weight": 6.5}
+  # P12, the dense cosine target
+  no_direction_loss: {"loss.w_dir": 0.0}
+  # P2, the only term that orders probes within a structure
+  no_listwise: {"loss.w_listwise": 0.0}
+  # bounded by our own measurement at <= 0.034 top-1 before any GPU time; near-zero headroom on the metal class (0.971 of a 0.971 ceiling)
+  probe_metal: {"data.probe_metal": true}
+  # predicted null: the ionisable-group distances are already in probe_potential
+  probe_electrostatic: {"data.probe_electrostatic": true}
+  # the only addition with controlled evidence on train-dissimilar structures, and it needs an alignment per target that nothing here produces
+  probe_conservation: {"data.probe_conservation": true}
+  # does type awareness matter at all
+  no_edge_type: {"model.use_edge_type": false}
+  # per-edge-type gains; predicted null, since the edge MLP already embeds the same nine types
+  het_mp: {"model.het_mp": true}
+
+  # ---- 3. Measured and published (2026-10-06, 3 seeds). Kept so those rows stay reproducible;
+  #         not in any group, and re-running them needs the new `full` reference first.
+  no_surface: {"model.use_surface": false}
+  no_esm: {"data.esm": null}
+  no_tensors: {"model.use_tensors": false}
+  no_vectors: {"model.use_vectors": false, "model.invariant_mode": "frames"}
+  invariant_frames: {"model.equivariant": false, "model.invariant_mode": "frames"}
+  achiral: {"model.chiral": false}
+  no_recycling: {"model.recycles": 0}
