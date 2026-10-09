@@ -7,6 +7,14 @@ after the fact is a lottery ticket rather than a finding.
 Baseline: `full` at site top-1 **0.843 ± 0.009** over three seeds (ablation of 2026-10-06, seeds 0.849 / 0.849 /
 0.831). Eleven arms in the grid.
 
+**Amendment 2026-10-08 (c): the new reference, one seed of three.** `full` on the current commit at fold 0,
+seed 0, original schedule: **site top-1 0.871**, val_score 0.811, selected epoch 22. Differences are taken against
+this once it has three seeds. First reading on the decisive arm: `no_site_decoder` at the same schedule and seed
+is 0.864, so the site decoder is worth **+0.007** — below the seed sd and a third of the threshold. Prediction 2 of
+this document said the decoder arms were the ones that decide whether the diagnosis was right; on one seed the
+answer is leaning towards "the decoder is not the remedy", and that is recorded here before the other two seeds
+exist rather than after.
+
 **Amendment 2026-10-08 (b): the baseline above is stale, and the reason is in this repository's own history.**
 Nothing is withdrawn, but no arm can be compared to 0.843 ± 0.009 until `full` is re-run, because that number was
 produced by a different model *and* read by a different rule:

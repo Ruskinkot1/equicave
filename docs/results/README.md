@@ -16,6 +16,34 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## The new reference, and a first answer on the site decoder (2026-10-08, seed 0 of three)
+
+`full` on the current commit, fold 0, seed 0, the original schedule (warmup 20, 60 epochs, early stop at 32):
+**site top-1 0.871** at the selected epoch 22, val_score 0.811. This is the reference the amended pre-registration
+asks for; two more seeds are needed before any arm is differenced against it.
+
+**The site decoder is a tie so far, and that is the question the grid existed to answer.** Against
+`no_site_decoder` at the same schedule and the same seed (epoch 28, top-1 0.864, val_score 0.799), the decoder is
+worth **+0.007** — a third of the +0.02 threshold and below the seed standard deviation of 0.009. The comparison is
+clean on the one axis that could have confounded it: with `site_decoder: false` the two decoder losses are never
+computed, so the stage-1 fix below changes nothing for that arm. If the gap stays here at three seeds, the
+diagnosis behind the decoder (on the COACH420 structures we get wrong, the right candidate is second in 24 of 53
+cases) was a correct description of the symptom and the decoder is not its remedy.
+
+**The stage-1 fix, measured before and after on the same arm and seed.** Holding `w_site_rank` and
+`w_site_margin` during stage 1 — they were missing because the decoder was added after the staging was designed —
+changes stage 1 from destructive to merely slow:
+
+| stage 1, `full` with the decoder | centre loss | site top-1 at the end of stage 1 |
+|---|---|---|
+| before the fix (both terms live) | 1.159 → **4.857**, rising | 0.757 → **0.015**, collapsed |
+| after the fix (both held) | 3.016 → 3.020, flat | 0.162 → **0.551**, climbing |
+
+The mechanism is now visible rather than inferred: the two terms rank and separate sites whose centres come from a
+head held at zero, so they were satisfiable by collapsing the logits and the cost fell on the trunk. With them
+held, the centre head still gets no gradient for twenty epochs — top-1 only reaches 0.551 against 0.871 after one
+epoch of stage 2 — so the shortened schedule is still the right default; the fix removes the damage, not the waste.
+
 ## The network is trained, and its ablation settles three of the project's novelty claims (2026-10-06)
 
 First trained EquiCave-Net, 3 seeds on validation fold 0, seed standard deviation about 0.009 — so a difference
