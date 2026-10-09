@@ -330,6 +330,33 @@ def load(path: Path) -> dict:
     return {k: (z[k].item() if z[k].ndim == 0 else z[k]) for k in z.files}
 
 
+def prefetch(paths, depth: int = 4, workers: int = 3):
+    """Yield `load(path)` for each path **in order**, with the next few decompressed on worker threads.
+
+    The training loop was `to_torch(load(file))` inside the inner loop, which serialises three things that do not
+    need to be serialised: reading the npz from disk, inflating it (`savez_compressed`, so every array is zlib),
+    and building the tensors -- all with the GPU idle, and then the GPU step with the CPU idle. At roughly one
+    second per structure for a 5-layer dim-128 model over ~1500 nodes, most of that second is not arithmetic.
+
+    Order is preserved exactly, so the sequence of structures a seed produces is unchanged and runs stay
+    comparable with the ones already measured. zlib releases the GIL, which is why threads are enough and no
+    process pool (with its pickling of every array) is involved.
+    """
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+    paths = list(paths)
+    if not paths:
+        return
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        q = deque(ex.submit(load, f) for f in paths[:max(1, depth)])
+        nxt = len(q)
+        while q:
+            item = q.popleft().result()
+            if nxt < len(paths):
+                q.append(ex.submit(load, paths[nxt])); nxt += 1
+            yield item
+
+
 def to_torch(d: dict, device="cpu"):
     import torch
     n_res, n_probe = int(d["n_res"]), int(d["n_probe"])

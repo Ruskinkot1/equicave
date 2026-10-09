@@ -255,8 +255,8 @@ def evaluate(model, files, device, cfg, log=print) -> dict:
     per_struct = []            # what the calibration and stratification blocks below need, one record per structure
     model.eval()
     with torch.no_grad():
-        for f in files:
-            d = D.load(f); b = D.to_torch(d, device); out = model(b)
+        for d in D.prefetch(files):
+            b = D.to_torch(d, device); out = model(b)
             ys["res"].append(d["y_res"]); ps["res"].append(torch.sigmoid(out["res_logit"]).cpu().numpy())
             ys["occ"].append(d["y_occ"]); ps["occ"].append(torch.sigmoid(out["occ_logit"]).cpu().numpy())
             yh.append(d["y_hot"]); ph.append(torch.sigmoid(out["hot_logit"]).detach().cpu().numpy())
@@ -459,8 +459,8 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         # An epoch is one pass over every cached structure — hours at full scale, so it reports inside the epoch
         # rather than only in the one line at the end of it.
         with progress.Bar(f"epoch {ep + 1}/{E}", len(order), unit="struct") as bar:
-            for i, j in enumerate(order):
-                b = D.to_torch(D.load(files_tr[j]), device)
+            for i, d_np in enumerate(D.prefetch([files_tr[j] for j in order])):
+                b = D.to_torch(d_np, device)
                 if cfg["optim"]["rotate"]:
                     b = D.random_rotation(b, rng)
                 aug = cfg["optim"].get("augment", {}) or {}

@@ -191,6 +191,45 @@ python scripts/train/collect_ablations.py --runs runs/training/ablations --out d
 Each run writes `runs/training/<tag>_fold<k>_seed<s>/` with `model.pt`, `history.json`, `metrics.json` and
 `model_card.json`. The first run also builds the feature cache (ESM-2 included), which later runs reuse.
 
+## 3a. Making a network run faster without changing what it learns
+
+Four things, in order of how much they give for how little risk. The first two are measured in this project; the
+last two are not, and say so.
+
+**1. Shorten the warmup — free, and it improves the result.** `stages.warmup_epochs` was 20; the default is now 6.
+Measured on a full run: site top-1 is 0.000 through the whole warmup and `occ_ap` peaks at epoch 14–15 and then
+*falls*, so epochs 15–20 cost about 1.3 hours and give back a negative delta on both metrics. After the warmup,
+top-1 goes from 0.551 to 0.871 in a single epoch of stage 2. At ~13 minutes per epoch that is **three hours saved
+per run**, with a better model at the end.
+
+**2. The cache is now prefetched — no effect on the maths.** The loop was `to_torch(load(file))` inside the inner
+loop, which serialises reading the npz, inflating it (every array is zlib, from `savez_compressed`) and building
+the tensors, all with the GPU idle, then runs the GPU step with the CPU idle. `data.prefetch` keeps the exact
+order — so a seed's sequence of structures is unchanged and runs stay comparable with the measured ones — and
+decompresses the next few on worker threads. How much it buys depends on how much of that second is data rather
+than arithmetic, which is one command to check:
+
+```bash
+nvidia-smi --query-gpu=utilization.gpu --format=csv -l 2
+```
+
+Below ~40 % utilisation the loop is data-bound and this is the dominant fix; near 90 % it was already compute-bound
+and the gain will be small.
+
+**3. `no_recycling`, if the arm is null.** `model.recycles: 2` means the trunk runs three times per structure. The
+arm that removes it is in the grid and has never been run. If it ties, that is close to a 3× saving on the trunk
+for nothing — but it has to be measured, not assumed, because recycling is where the probes move to their
+predicted centres and get relinked.
+
+**4. Fewer probes, with the same caveat.** 768 probes plus 512 surface points dominate the ~1500 nodes, and the
+probes are the one component the ablation values at 0.263 of site top-1 — so this is the setting least safe to
+cut blind. There is no measured probe-count curve; `--set data.n_probe=512` would be roughly 1.5× faster per epoch
+and needs its own arm before it is trusted.
+
+What not to bother with: lowering `optim.accumulate` changes the optimiser step frequency, not the compute; and
+`torch.compile` only pays off once several structures are batched into one padded forward pass, which is a real
+change to the loop rather than a flag.
+
 ## 3b. The CatBoost arm of the ranker
 
 The code path is exercised by a passing unit test on synthetic data (`tests/test_ranker_stages.py`,

@@ -173,3 +173,28 @@ def test_the_cache_refuses_to_be_reused_under_a_different_featurisation(tmp_path
     with pytest.raises(RuntimeError, match="n_surf|probe_potential"):
         D.build_cache(man, tmp_path, cache, None, limit=2, n_probe=32, n_surf=16, probe_potential=False,
                       log=lambda m: None)
+
+
+def test_prefetch_preserves_order_and_content(tmp_path):
+    """Order is the contract: a seed's sequence of structures must not change, or runs stop being comparable."""
+    paths = []
+    for k in range(9):
+        f = tmp_path / f"p{k}.npz"
+        D.save(dict(pos=np.full((2, 3), float(k)), tag=np.array(k)), f)
+        paths.append(f)
+    got = list(D.prefetch(paths, depth=3, workers=2))
+    assert [int(d["tag"]) for d in got] == list(range(9))
+    assert all(np.allclose(d["pos"], float(i)) for i, d in enumerate(got))
+    assert [int(d["tag"]) for d in D.prefetch(paths, depth=1, workers=1)] == list(range(9))
+    assert list(D.prefetch([])) == []
+
+
+def test_prefetch_matches_a_serial_load(tmp_path):
+    files, _ = _tiny_cache(tmp_path, n=3)
+    serial = [D.load(f) for f in files]
+    fetched = list(D.prefetch(files, depth=2, workers=2))
+    assert len(serial) == len(fetched)
+    for a, b in zip(serial, fetched):
+        assert set(a) == set(b)
+        for k in a:
+            assert np.array_equal(np.asarray(a[k]), np.asarray(b[k])), k
