@@ -30,6 +30,69 @@ computed, so the stage-1 fix below changes nothing for that arm. If the gap stay
 diagnosis behind the decoder (on the COACH420 structures we get wrong, the right candidate is second in 24 of 53
 cases) was a correct description of the symptom and the decoder is not its remedy.
 
+### Where the model actually fails: the first stratified table in this project
+
+`net_sites_by_class` from the same run, DCA ≤ 4 A, one seed. The aggregate is 0.871 and the per-class spread is
+**0.409 wide** — forty-five times the seed standard deviation — so the single number was hiding the finding rather
+than summarising it. The two gaps are what make it actionable: *ranking* is ceiling − top-1, what better ordering
+of the candidates we already generate could still win; *detection* is 1 − ceiling, what the candidate generator
+never offered.
+
+| class | n | top-1 | ceiling | ranking gap | detection gap |
+|---|---|---|---|---|---|
+| buried_shallow | 22 | **0.591** | 0.773 | 0.182 | **0.227** |
+| lipid | 12 | 0.667 | **1.000** | **0.333** | 0.000 |
+| apolar | 24 | 0.750 | **1.000** | **0.250** | 0.000 |
+| peptide | 14 | 0.786 | 0.786 | 0.000 | **0.214** |
+| size_small | 60 | 0.833 | 0.883 | 0.050 | 0.117 |
+| carbohydrate | 16 | 0.875 | 1.000 | 0.125 | 0.000 |
+| charged_ligand | 228 | 0.886 | 0.969 | 0.083 | 0.031 |
+| polar | 153 | 0.895 | 0.961 | 0.065 | 0.039 |
+| aromatic_ligand | 201 | 0.905 | 0.985 | 0.080 | 0.015 |
+| nucleotide | 83 | 0.916 | 0.988 | 0.072 | 0.012 |
+| buried_deep | 196 | 0.929 | 0.990 | 0.061 | 0.010 |
+| size_large | 88 | 0.943 | 1.000 | 0.057 | 0.000 |
+| metal | 34 | 0.971 | 0.971 | 0.000 | 0.029 |
+| heme | 29 | **1.000** | 1.000 | 0.000 | 0.000 |
+
+Three things follow, and none of them is visible in 0.871.
+
+**The failures are shallow and greasy, and they split cleanly into two different problems.** For lipid and apolar
+pockets the ceiling is **1.000** — every one of them is in our candidate set and we rank it below something else.
+That is a pure ranking loss, fixable without touching the detector, and it is the largest ranking gap in the
+table. For `buried_shallow` and peptide sites the ceiling itself is the limit (0.773 and 0.786): the generator
+never offers the answer, so no re-ranking can recover them. The project's stated goal of closing the first-rank
+gap therefore has two distinct targets, and conflating them is how a year gets spent on the wrong one.
+
+**The easy classes are the buried, bulky, aromatic ones, which is also what the training distribution is made
+of.** Haem is 1.000 at n=29 and metal 0.971 at n=34 — and the metal row deserves a caveat rather than a
+celebration, because those sites are large buried cofactor cavities, exactly the class LIGYSIS's authors say the
+standard benchmarks over-represent. It also bounds `probe_metal`: there is no headroom left on the class the
+channel was built for.
+
+**Our own earlier diagnosis is confirmed and narrowed.** DCC at 4 A is 0.743 against DCA's 0.871 and the median
+centre error is **1.096 A**, so centring is not the problem; `net_sites_dcc10` reaching 0.886 says the same. The
+deficit is which cavity, not where inside it — as measured before, now with the classes named.
+
+### Calibration: the measurement this literature does not have
+
+Same run, temperature fitted on 129 structures and reported on the other 143. The temperature is **2.749** and not
+at the search boundary, so the occupancy head is badly over-confident and one scalar nearly fixes the summary
+statistic: **ECE 0.0966 → 0.0346**.
+
+The pre-registered question was whether that changes the ranking, since temperature is monotone and cannot reorder
+anything — except through a non-linear aggregate, and P2Rank's sum of squares is one. It does: **sum_sq top-1
+0.825 → 0.832, +0.007**. Positive, and below both the threshold and the seed spread, so the honest statement is
+"the effect exists, is small, and its sign is now measured once".
+
+Two caveats that the reliability curve forces, and that a single ECE number would have hidden. After calibration
+the middle bins are still systematically over-confident — predicted 0.656 against observed 0.480 in the 0.6–0.7
+bin, 0.553 against 0.410 in 0.5–0.6, 0.755 against 0.641 in 0.7–0.8 — so a scalar fixes the scale and not the
+shape, and anything user-facing (the confidence in a site report) wants an isotonic fit instead. And the sum_sq
+ranking is **0.825 against the decoder's 0.871** on its own half, so P2Rank's aggregation rule applied to our
+probes is about 0.04 worse than the decoder's ordering; the two numbers are on different denominators (143 against
+272 structures) and are indicative rather than paired.
+
 **The stage-1 fix, measured before and after on the same arm and seed.** Holding `w_site_rank` and
 `w_site_margin` during stage 1 — they were missing because the decoder was added after the staging was designed —
 changes stage 1 from destructive to merely slow:
