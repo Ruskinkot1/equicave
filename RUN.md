@@ -284,6 +284,65 @@ What not to bother with: lowering `optim.accumulate` changes the optimiser step 
 `torch.compile` only pays off once several structures are batched into one padded forward pass, which is a real
 change to the loop rather than a flag.
 
+## 3c. Colab, and whether it is worth it
+
+**Check the memory first, because it decides everything else.** A run at the shipped configuration peaked at
+**22.5 GiB** (measured, from two torch OOM reports on an 80 GB A100).
+
+| Colab GPU | memory | verdict |
+|---|---|---|
+| T4 (free tier) | 16 GB | **does not fit.** Only as a smoke test, with the overrides below, and the numbers are then not comparable to anything |
+| L4 | 24 GB | fits with ~1.5 GiB to spare — the same thin margin that was OOMing on the A100 next to another process |
+| A100 40 GB (Pro) | 40 GB | fits, the configuration this project measures |
+| A100 80 GB | 80 GB | fits with room for two runs, which is still a bad idea: they contend and both slow down |
+
+**Move the cache, do not rebuild it.** Featurising 1367 structures takes over an hour and downloading the
+structures takes longer; the cache is just npz files keyed by PDB id plus `.featurisation.json`, so copy
+`data/cache/net` (about 1.2 GB) and `data/processed/manifest.csv` to Drive and point the run at them. That turns a
+three-hour setup into a five-minute one, and the signature file makes a mismatched cache refuse rather than
+silently measure the wrong featurisation.
+
+```python
+from google.colab import drive; drive.mount('/content/drive')
+D = '/content/drive/MyDrive/equicave'      # cache, manifest and runs live here, so a disconnect loses nothing
+```
+
+```bash
+# a private repo needs a token; a tarball of the checkout works just as well
+!git clone https://<token>@github.com/Ruskinkot1/equicave.git /content/equicave
+%cd /content/equicave
+!pip -q install -e ".[train]"
+```
+
+```bash
+# one run, checkpointed to Drive so a dropped session resumes instead of restarting
+!PYTHONPATH=src:. python -m training pockets-net \
+    --config training/configs/pockets_net.yaml --device cuda \
+    --out $D/runs --set ablation=full split.val_fold=0 optim.seed=0 \
+    data.cache_dir=$D/cache/net data.manifest=$D/manifest.csv
+```
+
+The trainer writes `checkpoint.pt` after every epoch and resumes from it — weights, EMA, optimiser, schedule, the
+RNG stream and the early-stopping counters — so re-running the same command after a disconnect continues rather
+than starting over. That is what makes Colab usable here at all: a run is about four hours and a free session is
+not reliably that long.
+
+**On a 16 GB T4, only as a smoke test:**
+
+```bash
+--set model.use_tensors=false model.dim=96 data.n_probe=384 optim.need_gb=12
+```
+
+`use_tensors=false` is the single largest saving: the degree-2 edge messages are `[E, F, 3, 3]`, about 53 MiB per
+tensor at 24 k edges and 128 channels, several per layer, five layers, three recycling passes, each kept by
+autograd. It also costs −0.006 top-1, which is nothing — but every one of these overrides changes the
+configuration, so such a run tells you the pipeline works and nothing about accuracy. Do not put its numbers in a
+table.
+
+**What Colab is actually good for here:** the CPU stages (the candidate table, the per-point model, the ranker,
+the benchmark evaluation), which need no GPU and fit a session comfortably, and a single `full` run on an A100 Pro
+instance while your own card is busy. What it is bad for: the grid, because 15 runs is 60 hours.
+
 ## 3b. The CatBoost arm of the ranker
 
 The code path is exercised by a passing unit test on synthetic data (`tests/test_ranker_stages.py`,
