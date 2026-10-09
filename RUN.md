@@ -361,6 +361,27 @@ one Pro session per seed.
 the benchmark evaluation), which need no GPU and fit a session comfortably, and a single `full` run on an A100 Pro
 instance while your own card is busy. What it is bad for: the grid, because 15 runs is 60 hours.
 
+### On an Apple M-series machine
+
+**Training the network: no.** Not because of a missing backend -- `--device mps` is plumbed and prints a warning
+-- but because of two numbers. The configuration peaks at **22.5 GiB**, which on a unified-memory machine has to
+come out of the same pool as the OS, so 16 GB is out and 32 GB is marginal. And the throughput is an order of
+magnitude or more below a CUDA card, so a four-hour run becomes days. Several scatter and einsum paths in the
+trunk may also fall back to the CPU; `PYTORCH_ENABLE_MPS_FALLBACK=1` works around that, slowly. None of this is
+measured here, which is itself a reason not to spend a week finding out.
+
+**Everything else: yes, and it is not a consolation prize.** The candidate table, the per-point model, both
+rankers and the whole benchmark evaluation are CPU work, and they are where the open questions actually are --
+the ranker is stuck at 0.792 for reasons that have nothing to do with the GPU. The test suite runs in about a
+minute, and `training/configs/pockets_net_cpu.yaml` gives a network smoke test that converges and is not
+publishable, and says so.
+
+```bash
+PYTHONPATH=src:. python -m pytest tests -q
+PYTHONPATH=src:. python scripts/train/train_ranker.py --tag native2 --seeds 5 --out docs/results/native2
+PYTHONPATH=src:. python scripts/eval/evaluate.py --set coach420 --ranker models/ranker_native2.txt
+```
+
 ## 3b. The CatBoost arm of the ranker
 
 The code path is exercised by a passing unit test on synthetic data (`tests/test_ranker_stages.py`,

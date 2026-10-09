@@ -38,7 +38,19 @@ def seed_all(seed: int) -> None:
 
 
 def pick_device(name: str = "auto"):
+    """The device to train on. `auto` is cuda when present, else cpu -- deliberately never mps.
+
+    Apple's backend is reachable with an explicit `--device mps` and says so when asked for, because it is
+    plumbed but untested here: the unified memory has to hold the ~22.5 GiB this configuration peaks at, several
+    of the scatter and einsum paths in the trunk may fall back to the CPU, and the throughput is far below a
+    CUDA card. `auto` does not choose it, so nobody gets routed to an untested backend by accident.
+    """
     import torch
+    if name == "mps":
+        print("device mps: plumbed but never measured here. Expect unimplemented-operator fallbacks "
+              "(PYTORCH_ENABLE_MPS_FALLBACK=1 works around them, slowly) and check that the machine's unified "
+              "memory can hold ~22.5 GiB. The CPU stages -- candidates, the point model, the ranker, the "
+              "benchmarks -- need none of this.", flush=True)
     if name != "auto":
         return torch.device(name)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
