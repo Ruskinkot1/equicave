@@ -113,3 +113,9 @@ def test_catboost_ranker_fits_and_orders():
     hit = [int(np.argmax(g["pred"].to_numpy()) == int(np.argmax(g["good"].to_numpy())))
            for _, g in df.assign(pred=s).groupby("pdb", sort=False)]
     assert np.mean(hit) > 0.6
+
+
+def test_the_table_names_the_learner_that_produced_it():
+    """A results table that says LightGBM for a CatBoost run is a mislabelled artefact that outlives the run."""
+    src = (pathlib.Path(__file__).resolve().parents[1] / "scripts/train/train_ranker.py").read_text()
+    assert "CatBoost YetiRank" in src and "LEARNER == 'catboost'" in src

@@ -531,6 +531,28 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**CatBoost does not beat LightGBM here** (2026-10-09, same table, same folds, same four seeds, so the comparison
+is paired on everything but the library). Cross-validated top-1:
+
+| learner | single model | seed ensemble | calibrated |
+|---|---|---|---|
+| LightGBM LambdaRank | **0.792 [0.770, 0.814]** | 0.789 [0.765, 0.811] | 0.792 [0.768, 0.815] |
+| CatBoost YetiRank | 0.775 [0.751, 0.798] | 0.774 [0.750, 0.797] | 0.775 [0.751, 0.798] |
+
+−0.017 for CatBoost, with intervals that overlap heavily, so the honest reading is "no better, possibly slightly
+worse". The hypothesis behind trying it was specific and is not confirmed: ordered boosting removes the prediction
+shift that is worst on small data, and oblivious trees are a stronger regulariser than LightGBM's free trees, so
+if our problem were variance from 204 columns over 1017 independent clusters, this is the swap that should have
+shown it. It did not, which is evidence that the problem is **not** the learner's regularisation. That matters
+because it narrows what is left: the composition difference (2.27 sites per structure in training against 1.29 on
+COACH420, 44.6 % single-site against 74.7 %) and the selection metric, neither of which a library can fix.
+
+Caveat stated rather than buried: this is a cross-validation comparison, and this file documents three cases of
+cross-validation ranking feature sets in the opposite order to the benchmark. It is not the deciding measurement.
+The deciding one needs `scripts/eval/evaluate.py` to load a CatBoost model, which `pocket_features.load_ranker`
+cannot yet do — it builds a LightGBM booster. Until that exists, the result above bounds the upside at zero on CV
+and says nothing about transfer. Tables in `docs/results/catboost2026-10-09/`.
+
 **The column budget was the wrong explanation, and the retry at 3.2x the data settles it** (measured 2026-10-08
 on the full 1367 structures and 40 986 candidates, 5-fold cluster CV, 4 seeds). The sentence above named a
 specific cause -- too few rows for too many columns -- so the retry swept the budget the cause points at, with the

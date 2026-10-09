@@ -436,7 +436,9 @@ def main():
         df, feats = add_margins(df, base_only)
         feats = list(dict.fromkeys(feats + [f for f in df.columns if f.endswith("_z")]))
         print(f"margins added: {len(feats)} features")
-    main_name = f"LightGBM LambdaRank ({len(feats)} features)"
+    # The label has to name the learner that produced the row. The first CatBoost run wrote a table saying
+    # "LightGBM LambdaRank" for every row, which is the kind of mislabelled artefact that outlives the run.
+    main_name = f"{'CatBoost YetiRank' if LEARNER == 'catboost' else 'LightGBM LambdaRank'} ({len(feats)} features)"
     seed_scores = [cv_scores(df, feats, sd) for sd in range(a.seeds)]
     per_method[main_name] = [evaluate(df, s) for s in seed_scores]
     ens = np.mean(seed_scores, axis=0)
