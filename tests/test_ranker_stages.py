@@ -82,3 +82,34 @@ def test_cascade_cannot_lower_the_ceiling_or_top_k_recall():
     a, b = TR.evaluate(df, first), TR.evaluate(df, out)
     assert b["ceiling"].mean() == pytest.approx(a["ceiling"].mean())
     assert b["top3"].mean() == pytest.approx(a["top3"].mean(), abs=1e-9)
+
+
+# --- the learner is a choice, and the default is the one the published numbers used -------------------------------
+
+def test_learner_default_and_rejection():
+    """LightGBM stays the default: every number in docs/results is its, and an arm needs a reference."""
+    assert TR.LEARNER == "lgbm" and TR.LEARNERS == ("lgbm", "catboost")
+    df = toy(8, 4)
+    feats = [c for c in df.columns if c.startswith(("good", "noise"))]
+    with pytest.raises(ValueError, match="learner must be one of"):
+        TR.fit(df, feats, 0, rounds=5, learner="xgboost")
+
+
+def test_learner_flag_is_exposed():
+    src = (pathlib.Path(__file__).resolve().parents[1] / "scripts/train/train_ranker.py").read_text()
+    assert '"--learner"' in src and "choices=list(LEARNERS)" in src
+    assert "LEARNER = a.learner" in src                      # the flag actually reaches the module-level default
+
+
+def test_catboost_ranker_fits_and_orders():
+    """Skipped where catboost is absent. The CatBoost path was written but never executed in that case."""
+    pytest.importorskip("catboost")
+    df = toy(30, 5)
+    feats = [c for c in df.columns if c.startswith(("good", "noise"))]
+    m = TR.fit(df, feats, 0, rounds=30, learner="catboost")
+    s = m.predict(df[feats])
+    assert len(s) == len(df) and np.isfinite(s).all()
+    # the correct candidate of each structure carries the largest `good`, so a fitted ranker must prefer it
+    hit = [int(np.argmax(g["pred"].to_numpy()) == int(np.argmax(g["good"].to_numpy())))
+           for _, g in df.assign(pred=s).groupby("pdb", sort=False)]
+    assert np.mean(hit) > 0.6

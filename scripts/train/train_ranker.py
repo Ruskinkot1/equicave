@@ -86,9 +86,68 @@ def add_margins(df: pd.DataFrame, feats: list[str]) -> tuple[pd.DataFrame, list[
     return pd.concat([df, m], axis=1), feats + list(m.columns)
 
 
-def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 400, objective: str = "lambdarank", params: dict | None = None):
-    """One model. `objective`: lambdarank (ordering), binary (is a site), regression (on -DCA)."""
+# Which boosting library fits the models. Set once from --learner, read by `fit`, so adding a learner does not
+# mean touching the fifteen call sites that train something.
+#
+# Why there is a choice at all: CatBoost's two distinguishing mechanisms speak to the failure this ranker actually
+# has. **Ordered boosting** estimates gradients on permutations rather than on the rows the tree is then fitted
+# to, which removes the prediction shift that standard boosting carries and which is worst on small data -- and we
+# have 1017 independent 30 %-identity clusters against 204 columns. **Oblivious trees** use one feature and
+# threshold per level, a far stronger regulariser than LightGBM's free trees, which is the shape of the model that
+# keeps beating us: P2Rank's random forest over 35 features, one of them dominant.
+#
+# What it is *not*: "ordered" in ordered boosting is the order of a row permutation, not the order of the pockets.
+# Ranking is the loss function's job, and for CatBoost that is YetiRank -- a listwise scheme like LambdaRank, not
+# a consequence of ordered boosting.
+#
+# LightGBM stays the default because every number in docs/results was measured with it, including the 0.792 top-1
+# reference, and an arm with no reference is not a measurement. The default moves when CatBoost beats it **on a
+# benchmark**, not on cross-validation: picking the best of several learners by cross-validation is exactly the
+# loop that produced 0.701 at 32 features and 0.626 at 272 while cross-validation ranked them the other way.
+LEARNERS = ("lgbm", "catboost")
+LEARNER = "lgbm"
+
+# Mirrors PARAMS for the CatBoost side. `depth` 6 against num_leaves 31 is the nearest equivalent capacity, and
+# allow_writing_files=False keeps it from scattering catboost_info/ directories through the repository.
+CAT_PARAMS = dict(iterations=400, learning_rate=0.05, depth=6, l2_leaf_reg=3.0, verbose=False,
+                  allow_writing_files=False)
+CAT_RANK_LOSS = "YetiRank"
+
+
+def _fit_catboost(train: pd.DataFrame, feats, seed: int, rounds: int, objective: str, params: dict | None):
+    """The CatBoost half of `fit`, with the same three objectives and the same group = structure convention."""
+    from catboost import CatBoostClassifier, CatBoostRanker, CatBoostRegressor, Pool
+    base = dict(CAT_PARAMS, iterations=rounds, random_seed=seed, **(params or {}))
+    if objective == "lambdarank":
+        y = train[TARGET] if TARGET in train else train["label"]
+        # group_id must be contiguous, which the caller's stable sort by pdb guarantees.
+        pool = Pool(train[feats], y, group_id=train["pdb"].astype(str).to_numpy())
+        model = CatBoostRanker(loss_function=CAT_RANK_LOSS, **base)
+    elif objective == "binary":
+        pool = Pool(train[feats], train["label"])
+        model = CatBoostClassifier(loss_function="Logloss", auto_class_weights="Balanced", **base)
+    elif objective == "regression":
+        pool = Pool(train[feats], -train["dca"].clip(upper=20.0))
+        model = CatBoostRegressor(loss_function="RMSE", **base)
+    else:
+        raise ValueError(objective)
+    model.fit(pool)
+    return model
+
+
+def fit(train: pd.DataFrame, feats, seed: int, rounds: int = 400, objective: str = "lambdarank",
+        params: dict | None = None, learner: str | None = None):
+    """One model. `objective`: lambdarank (ordering), binary (is a site), regression (on -DCA).
+
+    `learner` defaults to the module-level LEARNER, which --learner sets. Both libraries return an object with a
+    `.predict(X)`, so everything downstream is unchanged.
+    """
     train = train.sort_values("pdb", kind="stable")
+    learner = learner or LEARNER
+    if learner not in LEARNERS:
+        raise ValueError(f"learner must be one of {LEARNERS}, not {learner!r}")
+    if learner == "catboost":
+        return _fit_catboost(train, feats, seed, rounds, objective, params)
     base = dict(PARAMS, seed=seed, **(params or {}))
     if objective == "lambdarank":
         y = train[TARGET] if TARGET in train else train["label"]
@@ -258,6 +317,11 @@ def main():
     ap.add_argument("--ds", default=str(REPO / "data/processed")); ap.add_argument("--tag", default="native")
     ap.add_argument("--seeds", type=int, default=5); ap.add_argument("--ablate", action="store_true")
     ap.add_argument("--model", default="")
+    ap.add_argument("--learner", default="lgbm", choices=list(LEARNERS),
+                    help="which boosting library fits every model. lgbm (default) is what every number in "
+                         "docs/results was measured with; catboost brings ordered boosting and oblivious trees, "
+                         "which target the small-n overfitting this ranker has. Judge it on a benchmark, not on "
+                         "cross-validation.")
     ap.add_argument("--features-extra", default="", help="comma-separated: net (network scores), "
                     "points (per-point ligandability aggregates), esm (language-model features)")
     ap.add_argument("--out", default=str(REPO / "docs/results"))
@@ -286,6 +350,11 @@ def main():
                     "CSV, with the detector's own score beside it. Anything that combines the two must choose its "
                     "weight on these, not on a benchmark, which is the whole point of writing them out.")
     a = ap.parse_args()
+    global LEARNER
+    LEARNER = a.learner
+    if LEARNER != "lgbm":
+        print(f"learner: {LEARNER} -- the numbers in docs/results are LightGBM's, so this run is an arm and not "
+              f"a replacement for them")
     ds = pathlib.Path(a.ds)
     df = tables.read_table(ds, f"candidates_{a.tag}").reset_index(drop=True)
     if a.restrict_to:
@@ -466,7 +535,8 @@ def main():
         f"base rate {calib['base_rate']:.3f}, mean predicted {calib['mean_predicted']:.3f}.\n")
     if a.model:
         pathlib.Path(a.model).parent.mkdir(parents=True, exist_ok=True)
-        fit(df, feats, 0).save_model(a.model)
+        m = fit(df, feats, 0)
+        m.save_model(a.model)          # both libraries spell it the same way
         from sklearn.isotonic import IsotonicRegression
         iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         ok = np.isfinite(ens)

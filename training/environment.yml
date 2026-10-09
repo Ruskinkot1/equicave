@@ -9,6 +9,7 @@ dependencies:
   - pandas
   - scikit-learn
   - lightgbm
+  - catboost        # the --learner catboost arm of scripts/train/train_ranker.py; not needed for lgbm runs
   - pyyaml
   - pytest
   - pytorch=2.*

@@ -182,13 +182,59 @@ done
 python -m training pockets-net --config training/configs/mode_accurate.yaml --device cuda --set mode=oof tag=accurate
 python scripts/train/train_ranker.py --tag native2 --features-extra net --seeds 5 --model models/ranker_hybrid.txt
 
-# the ablation grid and its table
-bash scripts/train/run_ablations.sh runs/training/ablations 0 3
+# the ablation grid and its table (env vars, not positional arguments)
+DRY_RUN=1 GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh   # the plan and the cost first
+GROUP=baseline SEEDS=3 bash scripts/train/run_ablations.sh
 python scripts/train/collect_ablations.py --runs runs/training/ablations --out docs/results/ablations.md
 ```
 
 Each run writes `runs/training/<tag>_fold<k>_seed<s>/` with `model.pt`, `history.json`, `metrics.json` and
 `model_card.json`. The first run also builds the feature cache (ESM-2 included), which later runs reuse.
+
+## 3b. The CatBoost arm of the ranker
+
+The code path is exercised by a passing unit test on synthetic data (`tests/test_ranker_stages.py`,
+`test_catboost_ranker_fits_and_orders`: YetiRank fits and puts the right candidate first in over 60 % of toy
+structures), and the test skips where the package is absent. It has **never been run on the real candidate
+table**, so treat the first real run as a smoke test as much as a measurement.
+
+```bash
+micromamba install -y catboost          # or: pip install catboost
+
+# the reference, for the paired comparison -- same tag, same folds, same seeds
+python scripts/train/train_ranker.py --tag native2 --seeds 4 --out runs/ranker_lgbm
+python scripts/train/train_ranker.py --tag native2 --seeds 4 --learner catboost --out runs/ranker_cat
+```
+
+**What it is for.** Two mechanisms, both aimed at the failure this ranker actually has. *Ordered boosting*
+estimates gradients on row permutations instead of on the rows the tree is then fitted to, removing the prediction
+shift that standard boosting carries and that is worst on small data — and we have 1017 independent 30 %-identity
+clusters against 204 columns. *Oblivious trees* use one feature and threshold per level, a much stronger
+regulariser than LightGBM's free trees, which is the shape of model that keeps beating us: P2Rank's random forest
+over 35 features with one dominant.
+
+**What it is not.** "Ordered" in ordered boosting is the order of a permutation of training rows, not the order of
+the pockets. Ranking is the loss function's job; for CatBoost that is `YetiRank` (set in `CAT_RANK_LOSS`), a
+listwise scheme like LambdaRank and not a consequence of ordered boosting. Its other headline feature, ordered
+target statistics for categorical columns, is useless here: all 204 features are numeric.
+
+**How to judge it, and this part matters more than the run.** On a **benchmark**, not on cross-validation. Picking
+the best of several learners by cross-validation is precisely the loop that gave us 0.701 top-1 at 32 features and
+0.626 at 272 while cross-validation ranked the two the other way round. So:
+
+```bash
+# the only comparison that decides anything
+python scripts/eval/evaluate.py --set coach420 --ranker <lgbm model> --tag _lgbm
+python scripts/eval/evaluate.py --set coach420 --ranker <catboost model> --tag _cat
+```
+
+LightGBM stays the default until CatBoost wins that comparison, because every number in `docs/results` was
+measured with it — including the 0.792 [0.770, 0.814] top-1 reference — and an arm with no reference is not a
+measurement. If CatBoost wins, flip `LEARNER` in `scripts/train/train_ranker.py`, re-measure the published tables,
+and keep `--learner lgbm` as the comparison arm. Expect a learner swap to be worth 0.005–0.02 on tabular ranking;
+the gap we are chasing is 0.075 from the feature count alone, and the composition difference behind it (2.27 sites
+per structure in training against 1.29 on COACH420, 44.6 % single-site against 74.7 %) is untouched by either
+library.
 
 ## 4. Using a trained model
 
