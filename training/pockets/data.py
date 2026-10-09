@@ -474,8 +474,27 @@ def jitter(b: dict, rng: np.random.Generator, pos: float = 0.0, feat: float = 0.
     return b
 
 
+# Tensors indexed by the members of one node type rather than by all nodes. Node dropout has to subset these as
+# well, and that is not optional: the trunk assigns `x[slices[t]] = embed[t](feat_t)`, so a `slices` that has been
+# shrunk while `feat_t` has not is a shape error on the first structure of the first epoch -- which is exactly how
+# the `noise_aug` and `full_next` arms failed. The generic "first dimension equals the node count" rule misses all
+# of them, because their first dimension is the *type's* count.
+PER_TYPE_KEYS = {
+    "res": ("feat_res", "y_res", "res_type"),
+    "probe": ("feat_probe", "y_occ", "y_hot", "y_hot_proximity", "probe_potential", "probe_dir", "probe_dir_mask"),
+    "surf": ("feat_surf",),
+}
+# [n_sites, n_probe]: the probe axis is the second one, so it is subset along dim 1.
+PER_TYPE_COL_KEYS = {"probe": ("site_probe_mask",)}
+
+
 def drop_nodes(b: dict, keep):
-    """Keep the nodes `keep` marks, renumber the edges, and shrink every per-node and per-slice tensor with them."""
+    """Keep the nodes `keep` marks, renumber the edges, and shrink every per-node, per-type and per-slice tensor.
+
+    Relies on the node order being the res block, then probes, then surface points, which `featurize` and
+    `to_torch` both build and which is asserted here rather than assumed -- the per-type subsetting below is only
+    correct while each slice is a contiguous ascending range.
+    """
     import torch
     dev = b["pos"].device
     n = b["pos"].shape[0]
@@ -493,8 +512,25 @@ def drop_nodes(b: dict, keep):
     if "edge_scalar" in b and torch.is_tensor(b["edge_scalar"]) and len(b["edge_scalar"]) == ei.shape[1]:
         out["edge_scalar"] = b["edge_scalar"][live]
     if "slices" in b:
-        # Slices index nodes by type; each becomes the surviving members under the new numbering.
-        out["slices"] = {k: idx[v[keep[v]]] for k, v in b["slices"].items()}
+        new_slices, start = {}, 0
+        for t, sl in b["slices"].items():
+            if len(sl):
+                assert bool((sl == torch.arange(int(sl[0]), int(sl[0]) + len(sl), device=dev)).all()), \
+                    f"slice {t!r} is not a contiguous range; per-type subsetting would silently misalign"
+            local = keep[sl]                            # which members of this type survive
+            n_kept = int(local.sum())
+            for k in PER_TYPE_KEYS.get(t, ()):
+                v = b.get(k)
+                if torch.is_tensor(v) and v.shape[:1] == (len(sl),):
+                    out[k] = v[local]
+            for k in PER_TYPE_COL_KEYS.get(t, ()):
+                v = b.get(k)
+                if torch.is_tensor(v) and v.ndim >= 2 and v.shape[1] == len(sl):
+                    out[k] = v[:, local]
+            # The kept nodes keep their relative order, so each type is still a contiguous block afterwards.
+            new_slices[t] = torch.arange(start, start + n_kept, device=dev)
+            start += n_kept
+        out["slices"] = new_slices
     return out
 
 

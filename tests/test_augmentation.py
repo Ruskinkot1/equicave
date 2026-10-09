@@ -91,3 +91,62 @@ def test_dropout_never_empties_the_graph():
     b = batch()
     out = D.jitter(b, np.random.default_rng(0), drop=1.0)
     assert out["pos"].shape[0] >= 1
+
+
+def labelled_batch(**kw):
+    """`batch` plus the per-type tensors a real cached structure carries, which is where the bug lived."""
+    b = batch(**kw)
+    n_res, n_probe = len(b["slices"]["res"]), len(b["slices"]["probe"])
+    g = torch.Generator().manual_seed(7)
+    b["y_res"] = torch.rand(n_res, generator=g)
+    b["res_type"] = torch.randint(0, 21, (n_res,), generator=g)
+    b["y_occ"] = torch.rand(n_probe, generator=g)
+    b["y_hot"] = torch.rand(n_probe, 7, generator=g)
+    b["probe_potential"] = torch.rand(n_probe, 7, generator=g)
+    b["probe_dir"] = torch.rand(n_probe, 3, generator=g)
+    b["site_probe_mask"] = torch.rand(2, n_probe, generator=g)
+    return b
+
+
+def test_dropout_subsets_the_per_type_tensors_with_their_slices():
+    """The invariant the trunk depends on: len(feat_t) == len(slices[t]) for every type, after any drop.
+
+    Without it the first structure of the first epoch dies on `x[slices[t]] = embed[t](feat_t)`, which is how the
+    noise_aug and full_next arms failed. The generic per-node rule cannot catch these: their first dimension is
+    the type's count, not the node count.
+    """
+    b = labelled_batch(n_res=6, n_probe=5, n_surf=4)
+    keep = torch.ones(15, dtype=torch.bool); keep[[1, 7, 13]] = False      # one of each type
+    out = D.drop_nodes(b, keep)
+    for t, key in (("res", "feat_res"), ("probe", "feat_probe"), ("surf", "feat_surf")):
+        assert len(out[key]) == len(out["slices"][t]), t
+    assert len(out["y_res"]) == len(out["slices"]["res"]) == 5
+    assert len(out["res_type"]) == 5
+    for k in ("y_occ", "y_hot", "probe_potential", "probe_dir"):
+        assert len(out[k]) == len(out["slices"]["probe"]) == 4, k
+    assert out["site_probe_mask"].shape == (2, 4)          # per-site rows kept, probe columns subset
+    # the slices must still tile the surviving nodes exactly once, in order
+    all_idx = torch.cat([out["slices"][t] for t in ("res", "probe", "surf")])
+    assert torch.equal(all_idx, torch.arange(int(keep.sum())))
+
+
+def test_dropout_keeps_the_right_rows_not_just_the_right_count():
+    b = labelled_batch(n_res=4, n_probe=4, n_surf=2)
+    keep = torch.ones(10, dtype=torch.bool); keep[[0, 5]] = False     # first residue, second probe
+    out = D.drop_nodes(b, keep)
+    assert torch.equal(out["feat_res"], b["feat_res"][[1, 2, 3]])
+    assert torch.equal(out["y_occ"], b["y_occ"][[0, 2, 3]])
+    assert torch.equal(out["site_probe_mask"], b["site_probe_mask"][:, [0, 2, 3]])
+
+
+def test_a_dropped_batch_still_runs_through_the_model():
+    """End to end, because the shape error only appeared inside the trunk."""
+    from training.pockets import model as M
+    b = labelled_batch(n_res=8, n_probe=6, n_surf=5)
+    keep = torch.ones(19, dtype=torch.bool); keep[[2, 10, 17]] = False
+    out = D.drop_nodes(b, keep)
+    net = M.EquiCaveNet(dict(res=5, probe=4, surf=6), dim=16, layers=1, heads=2, n_rbf=8).eval()
+    with torch.no_grad():
+        o = net(out)
+    assert o["res_logit"].shape[0] == len(out["slices"]["res"])
+    assert o["occ_logit"].shape[0] == len(out["slices"]["probe"])
