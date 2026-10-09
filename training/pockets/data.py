@@ -652,7 +652,15 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                 f"conservation file in {d_c or '<unset data.conservation_dir>'}. Expected one `<pdb>.txt` per "
                 f"structure, two columns `residue_index score`, in the residue order of the PDB file. This arm "
                 f"needs an alignment per target (UniRef-scale search); nothing in this repository produces one.")
-    emb = Embedder(esm_name, device) if esm_name else None
+    # Built on first use, not up front. ESM-2 650M is about 2.5 GB to fetch and load, and a run whose cache is
+    # already complete -- every resumed run, every arm that shares a cache, every Colab session that copied the
+    # cache from Drive -- needs none of it. The old eager construction paid that cost on every single run.
+    emb_box = []
+
+    def emb():
+        if esm_name and not emb_box:
+            emb_box.append(Embedder(esm_name, device))
+        return emb_box[0] if emb_box else None
     comps = sorted({l[0] for r in rows for l in json.loads(r["ligands"])})
     # Each component is one small download the first time it is seen; at full scale there are thousands of them.
     entries = {c: ccd.load(c) for c in progress.track(comps, "chemical component definitions", unit="comp")}
@@ -683,7 +691,7 @@ def build_cache(manifest_csv: Path, pdb_dir: Path, out_dir: Path, esm_name: str 
                 bar.update(1, postfix=f"{len(done)} cached, {r['pdb']} has no pdb file"); continue
             try:
                 st = structure.read_pdb(p); rt = structure.residue_table(st)
-                e = cached(emb, r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
+                e = cached(emb(), r["pdb"], rt["seq"], rt["chain"], out_dir.parent / "esm") if esm_name else None
                 d = featurize(p, {l[0] for l in json.loads(r["ligands"])}, e, n_probe, n_surf, entries=entries, k_scale=k_scale,
                               druglike_only=druglike_only, require_interaction=require_interaction,
                               residue_chemistry=residue_chemistry, probe_potential=probe_potential,

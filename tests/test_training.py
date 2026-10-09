@@ -215,3 +215,22 @@ def test_gpu_headroom_refuses_when_the_card_is_occupied(monkeypatch):
     assert any("GiB free of" in s for s in said)                   # the numbers are logged before the refusal
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda d: (40 * 2 ** 30, 80 * 2 ** 30), raising=False)
     NT.gpu_headroom(torch.device("cuda"), need_gb=24.0, log=said.append)       # enough room: returns
+
+
+def test_a_complete_cache_does_not_load_esm(tmp_path, monkeypatch):
+    """ESM-2 650M is ~2.5 GB to fetch and load, and a run with a complete cache needs none of it.
+
+    That is every resumed run, every arm sharing a cache, and every Colab session that copied the cache from
+    Drive. The embedder is built on first use, so a cache hit must never construct it.
+    """
+    import training.pockets.esm_embed as E
+    files, _ = _tiny_cache(tmp_path, n=2)
+    cache = files[0].parent
+    man = tmp_path / "m.csv"
+    man.write_text("pdb,cluster30,fold,ligands\n" + "".join(f"S{k},c{k},{k % 2},\"[[\"\"LIG\"\"]]\"\n" for k in range(2)))
+
+    def boom(*a, **k):
+        raise AssertionError("ESM was loaded although every structure was already cached")
+    monkeypatch.setattr(E, "Embedder", boom)
+    ids = D.build_cache(man, tmp_path, cache, "facebook/esm2_t33_650M_UR50D", log=lambda s: None)
+    assert sorted(ids) == ["S0", "S1"]

@@ -339,6 +339,24 @@ autograd. It also costs −0.006 top-1, which is nothing — but every one of th
 configuration, so such a run tells you the pipeline works and nothing about accuracy. Do not put its numbers in a
 table.
 
+**The notebook is `notebooks/equicave_colab.ipynb`** — fourteen cells that do one thing: check the GPU, mount
+Drive, clone, point at the cache, run one arm, print the metrics including the per-class table. The launch command
+it runs is this one, and it is safe to re-run after a disconnect:
+
+```bash
+PYTHONPATH=src:. python -m training pockets-net \
+    --config training/configs/pockets_net.yaml --device cuda --out $D/runs \
+    --set ablation=full split.val_fold=0 optim.seed=0 tag=full \
+          data.cache_dir=$CACHE data.manifest=$MANIFEST
+```
+
+**Hours.** One run is **about 4 h** — 17 to 20 epochs at ~13.5 min, and that per-epoch figure was measured on an
+A100 that was simultaneously running someone else's job at 89 % utilisation, so a clean card should be faster by
+an unmeasured margin. Setup is **5 minutes** when the cache is on Drive, or **2–3 hours** when structures have to
+be downloaded and featurised. A complete cache no longer loads ESM-2 at all, which saves 2.5 GB of download on
+every run. Three seeds of `full` is therefore **12–14 h of GPU time**, i.e. more than one free session and about
+one Pro session per seed.
+
 **What Colab is actually good for here:** the CPU stages (the candidate table, the per-point model, the ranker,
 the benchmark evaluation), which need no GPU and fit a session comfortably, and a single `full` run on an A100 Pro
 instance while your own card is busy. What it is bad for: the grid, because 15 runs is 60 hours.
