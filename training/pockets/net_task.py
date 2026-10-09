@@ -246,6 +246,34 @@ def calibration_block(per_struct: list, cfg: dict) -> dict:
     return out
 
 
+def gpu_headroom(device, need_gb: float = 24.0, log=print) -> None:
+    """Refuse to start when the GPU is already occupied, instead of dying inside epoch 1.
+
+    This run costs an hour and a half of featurisation before the first forward pass, and a grid arm that OOMs
+    after that has burned the lot. The failure it catches is not a model that is too large: it is **another
+    process on the same card**. Torch says so in the message it raises -- "Process 1591263 has 56.63 GiB memory
+    in use" while ours wanted 22.45 GiB of a 79 GiB card and died for the last 200 MB -- but by then the time is
+    spent, and the arm is reported as FAILED next to arms that failed for real reasons.
+
+    `need_gb` is the working set measured on the shipped configuration (dim 128, 5 layers, 768 probes, 512 surface
+    points), which is dominated by the degree-2 edge messages: `[E, F, 3, 3]` at roughly 24 k edges and 128
+    channels is about 55 MB per layer per recycle before autograd keeps its copies.
+    """
+    import torch
+    if device.type != "cuda":
+        return
+    free, total = torch.cuda.mem_get_info(device)
+    free_gb, total_gb = free / 2 ** 30, total / 2 ** 30
+    log(f"GPU memory: {free_gb:.1f} GiB free of {total_gb:.1f} GiB")
+    if free_gb < need_gb:
+        raise RuntimeError(
+            f"only {free_gb:.1f} GiB of {total_gb:.1f} GiB is free on {device} and this configuration needs about "
+            f"{need_gb:.0f} GiB. Something else is holding the card -- check `nvidia-smi` for another training "
+            f"process (a finished run whose python is still alive counts) and stop it, or set "
+            f"optim.need_gb lower if you know this arm is smaller. Refusing now rather than after the "
+            f"featurisation pass, which takes over an hour.")
+
+
 def evaluate(model, files, device, cfg, log=print) -> dict:
     import torch
     from equicave import metrics as MT
@@ -489,7 +517,14 @@ def train_one(cfg, files_tr, files_va, device, out_dir: Path, log=print) -> dict
         torch.save(dict(model=model.state_dict(), ema=ema.shadow.state_dict(), opt=opt.state_dict(),
                         sched=sched.state_dict(), rng=rng.bit_generator.state, best=best, bad=bad,
                         history=history, epoch=ep + 1, best_state=best_state), ck_path)
-        if bad >= cfg["optim"]["patience"]:
+        # Never stop inside stage 1. The terms the model exists to optimise are held at zero there, so a plateau
+        # is what stage 1 *is* -- and patience measured against it ends the run before stage 2 ever begins. That is
+        # not a hypothetical: of three seeds of `full`, two reached stage 2 and scored 0.871 and 0.875 with a
+        # median centre error of 1.1 A, while the third stopped at epoch 16 of a 20-epoch warmup and reported the
+        # stage-1 checkpoint -- top-1 0.562, centre error 4.83 A. Read as a standard deviation that is 0.179 and
+        # makes every threshold in this project meaningless; read correctly it is a two-mode outcome with one mode
+        # being "the run was killed before the objective was switched on".
+        if bad >= cfg["optim"]["patience"] and ep >= stage1:
             log("early stop"); break
     if best_state is not None:
         ema.shadow.load_state_dict(best_state)
@@ -519,6 +554,8 @@ def load_model(path, device):
 def run(a) -> int:
     cfg = _cfg(a); device = pick_device(a.device)
     dc = cfg["data"]; cache = Path(dc["cache_dir"]); mode = cfg.get("mode", "train")
+    if int(cfg["optim"].get("epochs", 0)) > 0:
+        gpu_headroom(device, float(cfg["optim"].get("need_gb", 24.0)), log=print)
     tag = cfg.get("tag", cfg["ablation"])
     out_dir = run_dir(a.out, f"{tag}_fold{cfg['split']['val_fold']}_seed{cfg['optim']['seed']}")
     log = lambda s: (print(s, flush=True), open(out_dir / "log.txt", "a").write(s + "\n"))

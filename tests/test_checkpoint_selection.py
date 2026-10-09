@@ -99,3 +99,21 @@ def test_stage1_zeroes_every_term_that_reads_the_decoder():
         z = set(st.get("stage1_zero", []))
         assert {"w_center", "w_conf"} <= z, name
         assert {"w_site_rank", "w_site_margin"} <= z, f"{name}: the decoder's ranking terms must be held in stage 1"
+
+
+def test_early_stopping_cannot_fire_inside_stage_one():
+    """A plateau is what stage 1 is: the terms the model exists to optimise are zero there.
+
+    One of three `full` seeds stopped at epoch 16 of a 20-epoch warmup and reported its stage-1 checkpoint: top-1
+    0.562 and a median centre error of 4.83 A, against 0.871/0.875 and 1.1 A for the two seeds that reached stage
+    2. Averaged, that reads as a seed standard deviation of 0.179 and makes every threshold in this project
+    meaningless -- so the guard is on the stopping condition, not on how the number is reported afterwards.
+    """
+    src = (pathlib.Path(__file__).resolve().parents[1] / "training/pockets/net_task.py").read_text()
+    assert 'if bad >= cfg["optim"]["patience"] and ep >= stage1:' in src
+
+
+def test_the_shipped_schedule_is_the_measured_one():
+    import pathlib as _p, yaml
+    cfg = yaml.safe_load((_p.Path("training/configs/pockets_net.yaml")).read_text())
+    assert cfg["stages"]["warmup_epochs"] == 6 and cfg["optim"]["epochs"] == 30

@@ -127,7 +127,10 @@ stages:
   # stage 2 turns them on; the sparse terms otherwise compete with a dense signal from epoch 1 against an untrained
   # trunk. Zero parameter and zero time cost. Set `enabled: false` for the single-stage comparison arm.
   enabled: true
-  warmup_epochs: 20          # epochs of stage 1 (dense only); the rest of `optim.epochs` is stage 2
+  warmup_epochs: 6           # epochs of stage 1 (dense only); the rest of `optim.epochs` is stage 2
+  # Six and not twenty, measured: site top-1 is 0.000 for the whole of stage 1 and occ_ap peaks at epoch 14-15 and
+  # then falls, so the last third of a 20-epoch warmup costs over an hour and returns a worse model on both
+  # metrics. After the switch top-1 goes 0.551 -> 0.871 in one epoch.
   # Every sparse term that reads the site decoder or the centre head belongs here. `w_site_rank` and
   # `w_site_margin` were missing until 2026-10-08 because the decoder was added after the staging was designed,
   # and the cost is visible in the first `full` run with the decoder on: over three epochs site_rank falls
@@ -139,7 +142,7 @@ stages:
 optim:
   lr: 0.0005
   weight_decay: 0.01
-  epochs: 60
+  epochs: 30                 # with warmup 6 and patience 10 a run stops around 18-20; 60 was never reached
   accumulate: 4
   warmup_epochs: 2
   ema: 0.999
@@ -151,3 +154,6 @@ optim:
   # 2024), where this was worth +0.0976 combined PR-AUC against +0.0256 for 2.6x the training structures.
   augment: {pos: 0.0, feat: 0.0, drop: 0.0}     # off by default; the `noise_aug` arm turns it on
   amp: bf16
+  # Free GPU memory this configuration refuses to start without, checked before the featurisation pass rather than
+  # after it. The working set is dominated by the degree-2 edge messages, [E, F, 3, 3] per layer per recycle.
+  need_gb: 24.0

@@ -198,3 +198,20 @@ def test_prefetch_matches_a_serial_load(tmp_path):
         assert set(a) == set(b)
         for k in a:
             assert np.array_equal(np.asarray(a[k]), np.asarray(b[k])), k
+
+
+def test_gpu_headroom_is_a_no_op_off_cuda():
+    said = []
+    NT.gpu_headroom(torch.device("cpu"), need_gb=1e9, log=said.append)
+    assert said == []
+
+
+def test_gpu_headroom_refuses_when_the_card_is_occupied(monkeypatch):
+    """The failure this catches is another process on the card, after an hour of featurisation is already spent."""
+    said = []
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda d: (2 * 2 ** 30, 80 * 2 ** 30), raising=False)
+    with pytest.raises(RuntimeError, match="is free on .* needs about"):
+        NT.gpu_headroom(torch.device("cuda"), need_gb=24.0, log=said.append)
+    assert any("GiB free of" in s for s in said)                   # the numbers are logged before the refusal
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda d: (40 * 2 ** 30, 80 * 2 ** 30), raising=False)
+    NT.gpu_headroom(torch.device("cuda"), need_gb=24.0, log=said.append)       # enough room: returns

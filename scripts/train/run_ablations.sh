@@ -16,7 +16,8 @@
 #     matches `full`, the diagnosis behind the newest change was wrong and the rest of the grid matters less.
 #
 # Usage:
-#   bash scripts/train/run_ablations.sh                       # every arm, 3 seeds, fold 0
+#   bash scripts/train/run_ablations.sh                       # the five core arms, 3 seeds, fold 0
+#   GROUP=all bash scripts/train/run_ablations.sh             # the whole catalogue: 57 arms, read CORE below first
 #   SEEDS=1 GROUP=decoder bash scripts/train/run_ablations.sh # the decoder arms only, one seed
 #   ARMS="full no_site_decoder" bash scripts/train/run_ablations.sh
 #   DRY_RUN=1 bash scripts/train/run_ablations.sh             # print the plan and the cost, run nothing
@@ -46,7 +47,7 @@ fi
 echo "output directory: $OUT"
 FOLD=${FOLD:-0}
 SEEDS=${SEEDS:-3}
-GROUP=${GROUP:-all}
+GROUP=${GROUP:-core}
 DEVICE=${DEVICE:-auto}
 CFG=${CFG:-training/configs/pockets_net.yaml}
 CACHE_ROOT=${CACHE_ROOT:-data/cache}
@@ -59,10 +60,13 @@ DRY_RUN=${DRY_RUN:-0}
 EXTRA=${EXTRA:-${WARM:---set stages.warmup_epochs=6 --set optim.epochs=30}}
 PY=${PY:-python3}
 export PYTHONPATH=src:.
+# Torch's own recommendation when an allocation fails next to free-but-fragmented memory, and these runs allocate
+# a different edge count per structure, which is the case it exists for. Harmless when there is room to spare.
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
 # The plan: one "arm cache_dir" line per arm, ordered, from the config rather than from this file.
 PLAN=$($PY - "$GROUP" "${ARMS:-}" <<'PYEOF'
-import json, pathlib, sys, yaml
+import hashlib, json, pathlib, sys, yaml
 group, arms_arg = sys.argv[1], sys.argv[2]
 cfg = yaml.safe_load(pathlib.Path("training/configs/ablations.yaml").read_text())["ablations"]
 # Priority groups. "full" always leads: every other arm is a difference against it.
@@ -85,6 +89,23 @@ GROUPS = {
     "capacity":     ["small", "deep", "wide", "big"],
     "scale":        ["scale_max", "scale_max_big"],
 }
+# The grid that earns its GPU hours. Five arms, because the paper makes four claims and one of them needs a
+# candidate baseline:
+#
+#   full                 the reference every difference is taken against
+#   full_next            augmentation + protrusion, the two additions with evidence behind them, bundled
+#   no_site_decoder      the listwise site decoder, our only mechanism no published method has
+#   no_probes            the headline claim, worth 0.263
+#   no_tensors_matched   the ablation the field does not have, parameter-matched, and now also a memory argument
+#
+# Everything else in ablations.yaml stays reachable by name but is **not** in the default grid, and that is a
+# correction rather than a tidy-up. At 57 arms and 3 seeds the grid was 171 runs, about 770 GPU hours, and --
+# worse than the time -- the expected maximum of pure noise across 57 arms at a seed sd of 0.009 is **+0.026**,
+# above this project's own +0.02 claim threshold. A grid that large cannot support any claim at all; it
+# manufactures a winner. Arms were added whenever a question came up instead of the question being decided, which
+# converted uncertainty into compute.
+CORE = ["full", "full_next", "no_site_decoder", "no_probes", "no_tensors_matched"]
+
 known = set(cfg)
 if arms_arg.strip():
     want = arms_arg.split()
@@ -97,19 +118,28 @@ if arms_arg.strip():
     missing = [a for a in arms_arg.split() if a not in arms]
     if missing:
         sys.exit(f"unknown arm(s): {' '.join(missing)}; see training/configs/ablations.yaml")
+elif group in ("core", "default"):
+    arms = [a for a in CORE if a in known]
 elif group == "all":
     ordered = [a for g in ("decoder", "probes", "capacity", "scale", "equivariance", "mechanisms")
                for a in GROUPS[g] if a in known]
     arms = ["full"] + ordered + [a for a in cfg if a not in ordered and a != "full"]
+    print("# WARNING: GROUP=all is every arm in the file. See CORE in this script for why that cannot carry a "
+          "claim; use GROUP=core unless you specifically want the whole catalogue.", file=sys.stderr)
 elif group in GROUPS:
     arms = ["full"] + [a for a in GROUPS[group] if a in known]
 else:
-    sys.exit(f"unknown group {group!r}; one of: all {' '.join(GROUPS)}")
+    sys.exit(f"unknown group {group!r}; one of: core all {' '.join(GROUPS)}")
 for a in arms:
     over = cfg.get(a, {})
-    # An arm that touches data.* changes the arrays, so it may not share the default cache.
-    touches_data = any(str(k).startswith("data.") for k in over)
-    print(a, f"data/cache/net_{a}" if touches_data else "data/cache/net")
+    # The cache is keyed by the **featurisation**, not by the arm. Two arms that change the arrays the same way
+    # share one cache, which matters because a rebuild is over an hour: `full_next` and `probe_protrusion` both set
+    # probe_protrusion, and under per-arm naming each built its own copy of the same 1367 structures.
+    feat = {k: v for k, v in sorted(over.items()) if str(k).startswith("data.")}
+    if not feat:
+        print(a, "data/cache/net"); continue
+    key = hashlib.sha1(json.dumps(feat, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    print(a, f"data/cache/net_f{key}")
 PYEOF
 )
 

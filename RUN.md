@@ -191,10 +191,51 @@ python scripts/train/collect_ablations.py --runs runs/training/ablations --out d
 Each run writes `runs/training/<tag>_fold<k>_seed<s>/` with `model.pt`, `history.json`, `metrics.json` and
 `model_card.json`. The first run also builds the feature cache (ESM-2 included), which later runs reuse.
 
+## 3·0. One night on one GPU: what actually fits
+
+Arithmetic first, because it decides the plan. At ~13 min per epoch on the shipped configuration, with
+`warmup_epochs=6`, `epochs=30` and patience 10, a run stops around epoch 18–20, so **one run is about four
+hours**. A twelve-hour night is therefore **three runs**. Nothing about agents, parallelism or tooling changes
+that: the bottleneck is one card doing one structure at a time.
+
+So pick one of these, not more:
+
+```bash
+export PYTHONPATH=src:.
+# A. the reference, properly: three seeds of `full`. Gives a real seed spread and the number every
+#    later arm is differenced against. This is the one to run first.
+ARMS="full" SEEDS=3 bash scripts/train/run_ablations.sh
+
+# B. the decisive question instead: one seed each of the baseline, the decoder arm and the candidate baseline
+ARMS="full no_site_decoder full_next" SEEDS=1 bash scripts/train/run_ablations.sh
+```
+
+**A is the better night.** `no_site_decoder` already reads as +0.007 against `full` at one seed, which is a third
+of the claim threshold, and a one-seed repeat cannot settle it — whereas without three seeds of `full` on the
+current code there is no reference at all, and the one measured spread so far (0.179) was an artefact of a bug
+rather than a spread.
+
+Before starting, two checks that cost nothing and have each cost a night already:
+
+```bash
+nvidia-smi                 # another training process holding the card is the usual OOM; this run needs ~22 GiB
+df -h .                    # a cache rebuild writes ~1.2 GB and the featurisation pass takes over an hour
+```
+
+The trainer now refuses to start when the card has less than `optim.need_gb` free (24 GiB by default), **before**
+the featurisation pass rather than three structures into epoch 1.
+
 ## 3a. Making a network run faster without changing what it learns
 
 Four things, in order of how much they give for how little risk. The first two are measured in this project; the
 last two are not, and say so.
+
+**0. Early stopping can no longer fire inside stage 1 — this is the reliability fix, not a speed one.** A plateau
+is what stage 1 *is*, since the terms the model exists to optimise are held at zero there, so patience measured
+against it ended runs before stage 2 began. Of three seeds of `full`, two reached stage 2 and scored 0.871 and
+0.875 with a median centre error of 1.1 Å; the third stopped at epoch 16 of a 20-epoch warmup and reported its
+stage-1 checkpoint — top-1 **0.562**, centre error **4.83 Å**. Averaged that reads as a seed standard deviation of
+0.179, which would make every threshold in this project meaningless. It was one killed run.
 
 **1. Shorten the warmup — free, and it improves the result.** `stages.warmup_epochs` was 20; the default is now 6.
 Measured on a full run: site top-1 is 0.000 through the whole warmup and `occ_ap` peaks at epoch 14–15 and then
