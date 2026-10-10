@@ -531,6 +531,35 @@ candidates) and with them the easy negatives that place the hard pair on a scale
 support a 236-column model. The implementation is kept behind `--cascade` because the same idea should be retried
 once the dataset is an order of magnitude larger, where the row count stops being the binding constraint.
 
+**Site-count composition does not explain why cross-validation disagrees with the benchmark** (2026-10-10, three
+seeds, the ranker's own CV; full table in `docs/results/single_site_cv.md`). Our manifest averages 2.27 ligand
+sites per structure with 44.6 % single-site, COACH420 averages 1.29 with 74.7 %, so the obvious explanation for
+cross-validation ranking feature sets opposite to the benchmark was that ordering five pockets rewards what
+picking one of thirty does not. Restricting cross-validated top-1 to the single-site slice would then invert the
+ordering. It does not:
+
+| features | columns | CV top-1, all | CV top-1, single-site |
+|---|---|---|---|
+| native only | 16 | 0.592 | 0.608 |
+| + geometry + chemistry | 80 | 0.738 | 0.714 |
+| + shell | 172 | 0.781 | 0.752 |
+| everything | 204 | **0.791** | **0.754** |
+
+The smallest set is 0.146 *behind* the largest on the single-site slice, the same direction as on all structures.
+Selecting models there would not have fixed anything, and the measurement problem stands.
+
+What the slice does show is **saturation**: the 104 columns past the shell group buy +0.002 on single-site
+structures against +0.010 on all of them, and the gap between the slices widens monotonically with the column
+count — +0.016 in favour of single-site at 16 columns, −0.029 at 172, −0.037 at 204. The extra columns help the
+multi-site structures and stop paying on the single-site ones, which is what over-parameterisation relative to the
+number of independent *structures* rather than candidates looks like, and the same reading the CatBoost null
+supports.
+
+One limit, because it bounds the conclusion: the three benchmark numbers being explained (32 features 0.701, 236
+features 0.642, 272 features 0.626) come from three different candidate *tables*, not feature subsets of one. This
+test varies only the columns. It rules site count out; it does not rule out protein-size distribution, receptor
+preparation or the geometry constants, which is where the next attempt should look.
+
 **CatBoost does not beat LightGBM here** (2026-10-09, same table, same folds, same four seeds, so the comparison
 is paired on everything but the library). Cross-validated top-1:
 
