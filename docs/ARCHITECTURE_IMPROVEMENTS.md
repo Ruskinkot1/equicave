@@ -898,8 +898,8 @@ data card already covers.
 **[V on the claim]** offers a P2Rank+Conservation model with "a new, more accurate evolutionary conservation
 estimation pipeline based on the UniRef50 sequence database and the HMMER3 package", described as "capable of
 improving the default P2Rank predictions" — but **the magnitude is [NOT FOUND]** in this session. Against that:
-it requires HMMER3 plus a UniRef50 copy **at inference**, which is a heavy new dependency that cuts against this
-project's "nothing external at inference" constraint as much as P2Rank/Java would; and we already carry frozen
+it requires HMMER3 plus a UniRef50 copy **at inference** -- an alignment per target against a large database,
+for a gain whose magnitude is not reported; and we already carry frozen
 **ESM-2** features, which the survey records as **the biggest single learned-feature gain in the field** (VN-EGNN
 +0.06 DCC; GDEGAN +15.61 % DCC / +9.27 % DCA **[V]**) and which encode an evolutionary prior by construction. The
 expected marginal information from an explicit MSA conservation column, given ESM-2 is already in, is small, and

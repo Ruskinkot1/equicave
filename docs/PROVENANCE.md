@@ -33,7 +33,7 @@ Where an idea comes from a publication, it is listed below with the form in whic
 - LIGYSIS Zenodo record 13121414 metadata states CC-BY-4.0, 2026-10-03 [проверено].
 - CryptoBench repository was not reachable from this environment, 2026-10-03 [не найдено].
 - fpocket 4.x and P2Rank 2.5.1 were built/downloaded locally **only** for `scripts/baselines/`; neither `src/` nor
-  `training/` imports or executes them, and no Java is required to train or run EquiCave.
+  `training/` imports or executes them, so their licences do not reach the trained model.
 - SiteRadar (J. Chem. Inf. Model. 63:1124-1132, 2023) could not be read at the primary source: ACS returns
   403 from this environment and no preprint was found, so its architecture is recorded from a secondary
   description in the YuelPocket preprint, 2026-10-06 [из вторичного источника]. Its DCC 0.760 likewise comes

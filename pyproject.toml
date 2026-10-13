@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "equicave"
 version = "0.2.0"
-description = "Self-contained equivariant multi-task model of protein binding pockets"
+description = "Equivariant multi-task model of protein binding pockets"
 requires-python = ">=3.10"
 dependencies = ["numpy", "scipy", "pandas", "lightgbm", "scikit-learn", "pyyaml", "tqdm"]
 

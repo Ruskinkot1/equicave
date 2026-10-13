@@ -1,15 +1,15 @@
 # Paper plan
 
-**Working title.** *EquiCave: a self-contained equivariant multi-task model of binding pockets — ranked sites,
+**Working title.** *EquiCave: an equivariant multi-task model of binding pockets — ranked sites,
 pocket properties and ligand-atom hotspot fields, with a peptide-groove tier and homology-controlled evaluation.*
 
 Nothing in this plan is a result unless it appears in `docs/results/` with its protocol. Numbers taken from other
 papers are never compared directly to ours: every baseline is re-run on our splits.
 
 ## Contributions claimed
-1. **A pocket model with no external dependencies.** Candidates, features, network and ranker all come from the
-   structure alone; no P2Rank, fpocket or Java at training or inference. The native generator reaches a **0.977**
-   candidate ceiling on 1367 RCSB structures at 30 candidates per structure.
+1. **A geometry-only candidate generator with a measured ceiling.** The native generator reaches a **0.977**
+   candidate ceiling on 1367 RCSB structures at 30 candidates per structure, above both established finders on
+   identical data — which is the bound every re-ranker built on them inherits and none of them reports.
 2. **The ablation the field does not have, with a null result for degree 2.** Degree-0/1/2 Cartesian channels with
    invariant-gated tensor messages, plus an e3nn backbone to l=3, ablated at equal depth, width and features on one
    protocol. Applying l=2 tensor attention to pockets is prior art (GDEGAN 2026); what no paper provides is the
@@ -104,7 +104,7 @@ papers are never compared directly to ours: every baseline is re-run on our spli
 ## Claims and their falsification tests
 | id | claim | test | fails if |
 |---|---|---|---|
-| C1 | native candidates + learned ranker match or beat fpocket/P2Rank candidates + the same ranker, with no external tool | same 1367 structures, same labels, cluster CV, paired cluster bootstrap | CI of the difference in top-1 or top-(N+2) lies below 0 |
+| C1 | native candidates + learned ranker match or beat fpocket/P2Rank candidates + the same ranker | same 1367 structures, same labels, cluster CV, paired cluster bootstrap | CI of the difference in top-1 or top-(N+2) lies below 0 |
 | C2 | network features raise the ranker | out-of-fold `net_*` features added, paired bootstrap | CI includes 0 |
 | C3 | degree-2 tensor channels beat degree ≤ 1 and the invariant model | ablation grid, 3 seeds, equal depth/width | **failed**: full − no_tensors = −0.006 at seed sd 0.008, on an arm smaller than full. Degree 2 does no measurable work; chirality +0.000. Reported as a null result | full − no_tensors CI includes 0 |
 | C4 | probes on cavity points beat no probes (and a sphere-probe variant) | ablation | CI includes 0 |

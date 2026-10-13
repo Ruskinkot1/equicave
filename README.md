@@ -1,6 +1,6 @@
 # EquiCave
 
-Self-contained model of protein binding pockets. One structure in, three outputs:
+Model of protein binding pockets. One structure in, three outputs:
 
 Three operating modes (`equicave.modes`): **fast** for screening thousands of structures, **accurate** for a single
 target you are designing against, **peptide** for peptide binders.

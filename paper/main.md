@@ -1,5 +1,5 @@
 ---
-title: "EquiCave: a self-contained equivariant multi-task model of protein binding pockets"
+title: "EquiCave: an equivariant multi-task model of protein binding pockets"
 subtitle: "Ranked sites, pocket property classes and interaction-validated hotspot fields, with a peptide-groove tier"
 status: "DRAFT. Every number traces to docs/results/. Anything not measured says NOT RUN; nothing is placeholder."
 commit: "set by the author at submission: git rev-parse --short HEAD"
@@ -10,9 +10,9 @@ commit: "set by the author at submission: git rev-parse --short HEAD"
 Binding-site prediction is either geometric, or machine learning on top of an external pocket finder, and the
 published numbers are not comparable because ligand filters, chain handling and splits differ between papers. We
 present EquiCave, which takes one protein structure and returns three things: ranked binding sites, a multi-label
-description of each pocket, and a field of per-class ligand-atom probabilities inside it. The model is
-self-contained: candidates come from a closure analysis of the structure itself, and no external finder or Java
-runtime is used at training or inference. Its network is SO(3)-equivariant, with scalar, vector and symmetric
+description of each pocket, and a field of per-class ligand-atom probabilities inside it. Candidates come from a
+closure analysis of the structure's own cavities, and we measure their ceiling against two established finders on
+identical data. Its network is SO(3)-equivariant, with scalar, vector and symmetric
 traceless tensor channels updated by invariant-gated geometric tensor attention; probe nodes are placed on free
 points of real cavities rather than on a sphere, a solvent-accessible-surface point cloud is a node type in the same
 attention stack, and the probes are recycled through their own predicted centres. The hotspot field is trained on
@@ -54,9 +54,10 @@ is too strict.
 
 Four gaps motivate this work.
 
-1. **Dependence on external finders.** Learned re-rankers and CNN rescorers take their candidates from fpocket or
-   P2Rank, which fixes their ceiling and adds a Java runtime to every deployment. Whether a self-contained generator
-   can match that ceiling has not, to our knowledge, been measured.
+1. **An inherited ceiling that is never measured.** Learned re-rankers and CNN rescorers take their candidates
+   from fpocket or P2Rank, so their recall is bounded by a detector whose ceiling they do not report. How high that
+   bound is, and whether a geometry-only generator reaches it, has not, to our knowledge, been measured on
+   identical data.
 2. **Degree-2 features are applied but never isolated.** Tensor (l ≥ 2) channels are routine in molecular property
    prediction, and GDEGAN [arXiv:2603.19817, 2026] has since applied GotenNet with l = 2 and ESM-2 to binding-site
    prediction. What is missing is evidence that the degree is what helps: GDEGAN reports no l_max ablation, and no
@@ -74,8 +75,8 @@ Four gaps motivate this work.
 Peptide binders sit outside all of this: their sites are shallow elongated grooves, evaluated, when at all, with
 small-molecule conventions.
 
-**Contributions.** (i) A geometry-only candidate generator whose ceiling exceeds both external finders on the same
-structures, so no third-party finder or Java runtime is needed at training or inference. (ii) **The ablation the
+**Contributions.** (i) A geometry-only candidate generator whose ceiling exceeds both established finders on the
+same structures, which separates how much of the remaining error is detection from how much is ordering. (ii) **The ablation the
 field does not have, with a null result for tensor degree**: degree-0/1/2 Cartesian channels with invariant-gated
 tensor messages, ablated at equal depth, width and features on one protocol, where removing degree 2 costs −0.006
 site top-1 and chirality +0.000. The contribution is the measurement, not a gain. (iii) **Probes placed in real
@@ -502,9 +503,9 @@ Two of this paper's results are measurements of our own design that came out aga
 substance rather than as caveats.
 
 **The candidate result is the one that changes practice.** A closure analysis with two depth tiers and peak
-splitting covers 0.977 of sites in 30 proposals on our manifest and 0.989 on COACH420, above both external finders
-on identical data, so a pocket pipeline needs no third-party finder and no Java runtime. What it does not give is
-ordering — the detector's own score reaches 0.523 at top-1 where P2Rank's model reaches 0.754 — and that is exactly
+splitting covers 0.977 of sites in 30 proposals on our manifest and 0.989 on COACH420, above both established
+finders on identical data, so the recall a learned re-ranker inherits is not what limits it. What it does not give
+is ordering — the detector's own score reaches 0.523 at top-1 where P2Rank's model reaches 0.754 — and that is exactly
 where learning belongs. Our 32-feature re-ranker closes the gap to the point where the paired interval against
 P2Rank includes zero on top-1, top-N and top-(N+2); we are not distinguishable from it, and we do not claim more.
 
