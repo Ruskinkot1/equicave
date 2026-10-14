@@ -16,6 +16,56 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## The reference on the current code, and the network out of fold (2026-10-12 to 10-14)
+
+**Three seeds of `full`, validation fold 0, 272 sites** (grid `runs/training/ablations/20261012-133051`):
+
+| metric | mean | seed sd |
+|---|---|---|
+| site top-1 (DCA 4 Å) | **0.8517** | **0.0021** |
+| ceiling | 0.9669 | 0.0097 |
+| DCC 4 Å top-1 | 0.7071 | 0.0112 |
+| centre error, median | 1.335 Å | 0.033 |
+| occupancy AP | 0.7906 | 0.0030 |
+| property mean AUROC | 0.7112 | **0.0516** |
+| calibrated sum-of-squares top-1 delta | **−0.0047** | 0.0040 |
+
+What this changes. The seed sd is a quarter of the 0.009 assumed so far, so the expected noise maximum over the
+five core arms is 0.0038, not 0.026. The fold itself resolves far less than that: the unpaired binomial standard
+error at p = 0.85 and n = 272 is **0.0215**, so differences between arms are readable only paired on the same
+sites, which `collect_ablations.py` does not yet do. The reference sits 0.02 below the two good seeds of
+2026-10-06 (0.871, 0.875), so rows from that table and this one are not comparable. Calibration no longer
+improves the sum-of-squares ranking: 0.000, −0.007, −0.007 against the +0.007 measured on 2026-10-08, so that
+claim is withdrawn. The property heads are not stable across seeds (0.755, 0.724, 0.654) and are not reported as
+a result until they are.
+
+**The network out of fold, five folds, seed 0** (`mode=oof`, 97 epochs, 20.7 GPU hours, features for 40 986
+candidates in `data/processed/net_features_full.csv`). Site top-1 at the epoch each fold selected, read from the
+training log:
+
+| fold | epochs run | selected epoch (stage-2 epoch) | top-1 there | top-1 at the last epoch | site_rank on train, stage 2 first → last |
+|---|---|---|---|---|---|
+| 0 | 18 | 8 (2) | 0.857 | 0.853 | 0.575 → 0.159 |
+| 1 | 19 | 9 (3) | 0.892 | 0.880 | 0.544 → 0.140 |
+| 2 | 20 | 10 (4) | 0.843 | 0.808 | 0.510 → 0.114 |
+| 3 | 21 | 11 (5) | 0.881 | 0.822 | 0.537 → 0.085 |
+| 4 | 19 | 9 (3) | 0.876 | 0.862 | 0.542 → 0.097 |
+
+Mean **0.870**, fold-to-fold sd **0.0196**: ten times the seed sd. Which structures are in the validation fold
+moves the number far more than the seed does, and fold 0 is one of the harder folds. Two caveats belong next to
+these numbers. They are selected on the fold they are reported on (the checkpoint is the best validation score),
+an optimism bounded here by the stage-2 spread of about 0.01; the same holds for 0.8517. And they are log-line
+values: fold 0 gives 0.857 here against 0.853 for the reference seed 0 with the same seed and config, one site
+of 272.
+
+Two findings from the trajectories, both on all five folds. **Every fold peaks within five epochs of stage 2**,
+and nothing in the next ten beats it, so a patience of 5 would have selected the same five checkpoints in 15.5 h
+instead of 20.7 (25 % saved; the trajectory up to the stop is the same run). **The ranking head memorises**: on
+train, `site_rank` falls 4-6× after the peak while validation top-1 stays flat or falls, by 0.035 and 0.059 on
+folds 2 and 3. The stopping rule keeps the overfit weights out of the result, but the useful training of the
+site ranking lasts two to five epochs, which points at data and regularisation of that head rather than at more
+architecture. Hypothesis, from training curves only.
+
 ## The new reference, and a first answer on the site decoder (2026-10-08, seed 0 of three)
 
 `full` on the current commit, fold 0, seed 0, the original schedule (warmup 20, 60 epochs, early stop at 32):

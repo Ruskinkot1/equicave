@@ -128,7 +128,10 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
         booster, feats = ranker
         X = np.array([[r.get(f, 0.0) for f in feats] for r in rows], float)
         scores["ranker"] = booster.predict(X).tolist()
-        if extra is not None:
+        # Labelled by what the ranker reads, not by whether a network was loaded: a plain ranker served next to a
+        # network ignores every net_* column, and calling that row "ranker+net" would publish the plain ranker's
+        # number as the hybrid's.
+        if extra is not None and reads_net(feats):
             scores["ranker+net"] = scores.pop("ranker")
     if extra is not None:
         # With the site decoder the network has an opinion about which pocket beats which; without it the only
@@ -262,6 +265,30 @@ def git_commit() -> str:
         return "unknown"
 
 
+def reads_net(feats) -> bool:
+    """Whether a ranker's feature list includes any network column."""
+    return any(f in pf.NET_FEATURES or f.startswith("net_") for f in feats)
+
+
+def check_net_args(ranker_path: str, net_path: str) -> None:
+    """Refuse a hybrid ranker without a network.
+
+    The per-candidate rows are read with `r.get(f, 0.0)`, so every net_* column the ranker learned from would be a
+    constant zero and the scores would look valid while being nothing of the kind. `pf.check_features` exempts the
+    network columns on the understanding that the caller reports their absence; this is that report, made before
+    a few thousand structures are scored rather than after.
+    """
+    if not ranker_path:
+        return
+    fj = pathlib.Path(str(ranker_path) + ".features.json")
+    feats = json.loads(fj.read_text()) if fj.exists() else []
+    if reads_net(feats) and not net_path:
+        sys.exit(f"{pathlib.Path(ranker_path).name} was trained with network features "
+                 f"({sum(1 for f in feats if f.startswith('net_'))} net_* columns) but no --net was given: every one "
+                 f"of them would be served as 0.0. Pass the network the features came from, e.g. "
+                 f"--net runs/training/net-oof/full_fold0_seed0/fold0/model.pt")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True); ap.add_argument("--ranker", default=""); ap.add_argument("--net", default="")
@@ -289,6 +316,7 @@ def main():
                          "same candidate ceiling and the same number of predictions.")
     ap.add_argument("--grow-radius", dest="grow_radius", type=float, default=6.0)
     a = ap.parse_args()
+    check_net_args(a.ranker, a.net)
     rows = load_set(a.set, a.limit, a.ligand_rule)
     print(f"{a.set}: {len(rows)} entries", flush=True)
     ids = sorted({r["pdb"] for r in rows})
