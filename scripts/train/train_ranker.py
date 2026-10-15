@@ -508,17 +508,29 @@ def main():
             binary = df.assign(**{TARGET: df["label"].astype(int)})
             per_method["  binary relevance instead of graded"] = [evaluate(binary, cv_scores(binary, feats, sd)) for sd in range(max(2, a.seeds // 2))]
     ref = per_method["native order (detector score)"][0]
+    avgs = {name: pd.concat(runs).groupby("pdb", sort=False).agg({c: "mean" for c in ("top1", "top3", "topN", "topN2", "mrr", "ceiling")} | {"cluster30": "first"}).reset_index()
+            for name, runs in per_method.items()}
     for name, runs in per_method.items():
-        avg = pd.concat(runs).groupby("pdb", sort=False).agg({c: "mean" for c in ("top1", "top3", "topN", "topN2", "mrr", "ceiling")} | {"cluster30": "first"}).reset_index()
+        avg = avgs[name]
         st = M.summarize(avg)
         st["seed_sd_top1"] = float(np.std([r["top1"].mean() for r in runs])) if len(runs) > 1 else 0.0
         st["paired_vs_native_order"] = {c: M.paired_boot(avg.set_index("pdb").loc[ref["pdb"], c].to_numpy(float), ref[c].to_numpy(float), ref["cluster30"].to_numpy())
                                         for c in ("top1", "topN2")}
+        # An ablation row is a claim about what one feature group is worth, and that claim is the paired
+        # difference against the full model on the same structures -- not two overlapping intervals read side by
+        # side. Negative means removing the group costs that much.
+        if name.startswith("  ") and main_name in avgs:
+            full = avgs[main_name].set_index("pdb").loc[avg["pdb"]]
+            st["paired_vs_full_model"] = {c: M.paired_boot(avg[c].to_numpy(float), full[c].to_numpy(float), avg["cluster30"].to_numpy())
+                                          for c in ("top1", "topN2")}
         results[name] = st
-    lines = ["| method | top-1 | top-3 | top-N | top-(N+2) | MRR | gain top-1 vs native order |", "|---|---|---|---|---|---|---|"]
+    lines = ["| method | top-1 | top-3 | top-N | top-(N+2) | MRR | gain top-1 vs native order | top-1 vs full model (paired) |",
+             "|---|---|---|---|---|---|---|---|"]
     for name, st in results.items():
         g = st["paired_vs_native_order"]["top1"]
-        lines.append(f"| {name} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | {M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}] |")
+        f = st.get("paired_vs_full_model", {}).get("top1")
+        fcol = f"{f['diff']:+.3f} [{f['lo']:+.3f}, {f['hi']:+.3f}]" if f else ""
+        lines.append(f"| {name} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | {M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}] | {fcol} |")
     table = "\n".join(lines)
     print(table)
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
