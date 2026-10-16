@@ -47,3 +47,23 @@ def test_label_follows_what_the_ranker_reads():
     assert not ev.reads_net(["nat_rank", "geo_depth", "esm_pc0"])
     src = (ROOT / "scripts/eval/evaluate.py").read_text()
     assert 'if extra is not None and reads_net(feats):' in src
+
+
+def test_network_gets_its_own_point_model():
+    """The network's probe placement must not depend on whether the *ranker* reads point aggregates."""
+    ev = _ev()
+    lig = {"data": {"probe_sampling": "ligandable", "point_model_tag": "native"}}
+    assert ev.net_point_model_path(lig).endswith("models/point_native.txt")
+    assert ev.net_point_model_path(lig, "custom.txt") == "custom.txt"
+    assert ev.net_point_model_path({"data": {"probe_sampling": "tiered"}}) == ""
+    assert ev.net_point_model_path(None) == ""
+    src = (ROOT / "scripts/eval/evaluate.py").read_text()
+    assert "point_model=net_point_model" in src and "net_point_model=net_pm" in src
+
+
+def test_report_survives_metadata_entries_and_writes_numbers_first():
+    src = (ROOT / "scripts/eval/evaluate.py").read_text()
+    assert 'if m.startswith("_"):' in src                      # `_composition` is not a method row
+    main = src[src.index("def main():"):]
+    assert main.index('f"eval_{a.set}{a.tag}.json"') < main.index('f"eval_{a.set}{a.tag}.md"')
+    assert main.index("eval_candidates_") < main.index('f"eval_{a.set}{a.tag}.md"')

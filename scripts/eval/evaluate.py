@@ -29,7 +29,7 @@ Usage: python scripts/eval/evaluate.py --set heldout|coach420|holo4k|ligysis|cry
        [--net runs/training/pockets-net/full_fold0_seed0/model.pt] [--external fpocket,p2rank] [--limit N] [--jobs 4]
 Output: docs/results/eval_<set>.json / .md
 """
-import argparse, csv, json, os, pathlib, shutil, subprocess, sys, tempfile, time, urllib.request
+import argparse, csv, functools, json, os, pathlib, shutil, subprocess, sys, tempfile, time, urllib.request
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -96,7 +96,46 @@ def load_set(name, limit, ligand_rule="mlig"):
     return out[:limit] if limit else out
 
 
-def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_model=None):
+# One load per worker process, not one per structure. The ESM-2 650M weights were being read from disk for every
+# benchmark entry -- 300 times on COACH420, about 3 500 on HOLO4K -- and the network, the ranker and the point
+# booster with them; that was most of the 18 s per structure.
+@functools.lru_cache(maxsize=None)
+def _ranker(path):
+    return pf.load_ranker(path)
+
+
+@functools.lru_cache(maxsize=None)
+def _booster(path):
+    import lightgbm as lgb
+    return lgb.Booster(model_file=path)
+
+
+@functools.lru_cache(maxsize=None)
+def _net(path):
+    from training.pockets import net_task as NT
+    import torch
+    return NT.load_model(path, torch.device("cpu"))
+
+
+@functools.lru_cache(maxsize=None)
+def _embedder(name):
+    from training.pockets.esm_embed import Embedder
+    return Embedder(name)
+
+
+def net_point_model_path(net_cfg, override=""):
+    """The booster the network places its probes with, or "" when its config does not ask for one.
+
+    A network trained with `probe_sampling: ligandable` and served without this booster falls back to tiered
+    placement, which it never saw: every benchmark number it produces is then a measurement of a different input
+    distribution. The ranker needing point aggregates is a separate question and used to be the only trigger.
+    """
+    if net_cfg is None or net_cfg["data"].get("probe_sampling", "tiered") != "ligandable":
+        return ""
+    return override or str(REPO / f"models/point_{net_cfg['data'].get('point_model_tag') or 'native'}.txt")
+
+
+def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_model=None, net_point_model=None):
     cands = detect.detect_sites(st["xyz"])
     if not cands:
         return []
@@ -105,12 +144,13 @@ def predict_native(st, ranker, net_model, net_cfg, pdb_path, esm=None, point_mod
     if net_model is not None:
         import torch
         from training.pockets import data as D, net_task as NT
-        fkw = D.featurisation_kwargs(net_cfg["data"], point_model=point_model, log=print)
-        d = D.featurize(pdb_path, None, None, net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"], **fkw)
-        if d is not None and net_cfg["data"].get("esm"):
-            from training.pockets.esm_embed import Embedder, cached
+        fkw = D.featurisation_kwargs(net_cfg["data"], point_model=net_point_model, log=print)
+        emb = None
+        if net_cfg["data"].get("esm"):
+            from training.pockets.esm_embed import cached
             rt = structure.residue_table(st)
-            d = D.featurize(pdb_path, None, cached(Embedder(net_cfg["data"]["esm"]), pathlib.Path(pdb_path).stem, rt["seq"], rt["chain"], REPO / "data/cache/esm"), net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"], **fkw)
+            emb = cached(_embedder(net_cfg["data"]["esm"]), pathlib.Path(pdb_path).stem, rt["seq"], rt["chain"], REPO / "data/cache/esm")
+        d = D.featurize(pdb_path, None, emb, net_cfg["data"]["n_probe"], net_cfg["data"]["n_surf"], **fkw)
         if d is not None:
             with torch.no_grad():
                 out = net_model(D.to_torch(d))
@@ -196,7 +236,7 @@ def _one(task):
     sites = LB.group_sites(ligs)
     copies = [l["xyz"] for l in ligs]; L = np.vstack(copies); ns = len(sites)
     site_atoms = [np.vstack([ligs[i]["xyz"] for i in s]) for s in sites]
-    ranker = pf.load_ranker(args["ranker"]) if args["ranker"] else None
+    ranker = _ranker(args["ranker"]) if args["ranker"] else None
     esm = None
     if ranker is not None and any(f.startswith("esm_") for f in ranker[1]):
         from equicave.esm_features import EsmFeatures
@@ -212,13 +252,18 @@ def _one(task):
         # that the ranker learned these columns from *out-of-fold* point scores, so the full-fold model serves
         # slightly sharper values than it was trained on; the shift is in the optimistic direction and is the reason
         # the headline row is the one that excludes train-similar structures.
-        point_model = lgb.Booster(model_file=path_pm)
-    net_model = net_cfg = None
+        point_model = _booster(path_pm)
+    net_model = net_cfg = net_pm = None
     if args["net"]:
-        from training.pockets import net_task as NT
-        import torch
-        net_model, net_cfg = NT.load_model(args["net"], torch.device("cpu"))
-    preds = predict_native(st, ranker, net_model, net_cfg, path, esm, point_model)
+        net_model, net_cfg = _net(args["net"])
+        path_npm = net_point_model_path(net_cfg, args.get("point_model") or "")
+        if path_npm:
+            if not pathlib.Path(path_npm).exists():
+                return dict(pdb=pdb, status=f"point model {pathlib.Path(path_npm).name} missing (the network places probes with it)"), []
+            # Same caveat as the ranker's point model: the full-data booster has seen the train-similar
+            # structures, which is why those are a separate row.
+            net_pm = _booster(path_npm)
+    preds = predict_native(st, ranker, net_model, net_cfg, path, esm, point_model, net_point_model=net_pm)
     # The volume metrics need a free lattice shared by the prediction and the answer. Both DCC and DCA collapse a
     # pocket to its centre, so a prediction covering a tenth of the site and one engulfing half the protein are
     # indistinguishable to them; the segmentation line of the literature reports DVO alongside DCC for that
@@ -398,6 +443,18 @@ def main():
             results.setdefault("all", {})[f"{tool} (DCA)"] = M.summarize(M.per_structure(ext.assign(s=-ext["tool_rank"]), "s"))
         else:
             print(f"  external table {f.name} not found; skipped")
+    # The numbers and the per-candidate predictions are written before the markdown table, so a failure while
+    # formatting costs a re-render rather than the hours of prediction behind it -- which is what a KeyError in the
+    # table loop once did, after 88 minutes on COACH420.
+    out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
+    # The protocol goes in the file with the numbers. A results file that does not say which ranker, which network
+    # and which receptor definition produced it cannot be compared with another one -- the single-chain receptor bug
+    # was invisible for exactly that reason, and every number measured under it had to be thrown away.
+    provenance = dict(commit=git_commit(), geometry=pf.geometry(),
+                      **{k: v for k, v in vars(a).items() if k not in ("jobs",)})
+    (out / f"eval_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, ligand_rule=a.ligand_rule, n=len(rows),
+        run=provenance, status=summ.status.value_counts().to_dict(), results=results), indent=1))
+    cand.to_csv(REPO / "data/processed" / f"eval_candidates_{a.set}{a.tag}.csv", index=False)
     lines = [f"# Evaluation: {a.set}", "",
              f"{(summ.status == 'ok').sum()} structures evaluated, skipped: {summ.status.value_counts().to_dict()}. "
              f"Ligand rule: {a.ligand_rule} ({'published relevant-ligand list' if a.ligand_rule == 'mlig' else 'every drug-sized HETATM group'}). "
@@ -408,22 +465,15 @@ def main():
              "|---|---|---|---|---|---|---|---|---|---|"]
     for subset, d in results.items():
         for m, st in d.items():
+            if m.startswith("_"):                  # per-subset metadata such as the site-count composition
+                continue
             red = st.get("redundancy_all", {})
             rtxt = f"{red.get('fraction', float('nan')):.3f}" if red else "—"
             if "mean_predictions" in st:
                 m = f"{m}, {st['mean_predictions']:.1f} predictions"
             lines.append(f"| {subset} | {m} | {M.fmt(st['top1'])} | {M.fmt(st['top3'])} | {M.fmt(st['topN'])} | "
                          f"{M.fmt(st['topN2'])} | {M.fmt(st['mrr'])} | {st['n']} | {st['ceiling']:.3f} | {rtxt} |")
-    out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / f"eval_{a.set}{a.tag}.md").write_text("\n".join(lines) + "\n")
-    # The protocol goes in the file with the numbers. A results file that does not say which ranker, which network
-    # and which receptor definition produced it cannot be compared with another one -- the single-chain receptor bug
-    # was invisible for exactly that reason, and every number measured under it had to be thrown away.
-    provenance = dict(commit=git_commit(), geometry=pf.geometry(),
-                      **{k: v for k, v in vars(a).items() if k not in ("jobs",)})
-    (out / f"eval_{a.set}{a.tag}.json").write_text(json.dumps(dict(set=a.set, ligand_rule=a.ligand_rule, n=len(rows),
-        run=provenance, status=summ.status.value_counts().to_dict(), results=results), indent=1))
-    cand.to_csv(REPO / "data/processed" / f"eval_candidates_{a.set}{a.tag}.csv", index=False)
     print("\n".join(lines))
 
 
