@@ -16,6 +16,53 @@ A number that is absent is absent on purpose: the run did not happen, or did not
 Conventions in every table: success is DCA ≤ 4 Å (DCC reported where available); N is the structure's own number of
 ligand sites; intervals are 95 % cluster bootstraps; gains carry a paired cluster bootstrap; "not run" means not run.
 
+## The network on COACH420: first rank ahead of every method we could run (2026-10-22)
+
+One network checkpoint (`net-oof` fold 0, seed 0) served by `evaluate.py` at commit `8a27ecf`, with the point
+model it was trained to place probes with. 288 structures evaluated; the comparison tables intersect with the
+structures every external method predicted and split by similarity to **our** training manifest. Paired cluster
+bootstrap, success at DCA 4 Å unless stated. Files: `compare_coach420_net*.md`, `eval_coach420_hybrid.md`.
+
+**Not train-similar, 228 structures common to all methods:**
+
+| method | ceiling | top-1 | top-N | top-(N+2) |
+|---|---|---|---|---|
+| **EquiCave network only** | 0.991 | **0.851** [0.802, 0.899] | **0.873** | **0.930** |
+| EquiCave ranker + network | 0.991 | 0.825 [0.772, 0.876] | 0.864 | 0.934 |
+| DeepSurf | 0.842 | 0.807 [0.753, 0.859] | 0.816 | 0.842 |
+| P2Rank | 0.930 | 0.759 [0.701, 0.814] | 0.816 | 0.890 |
+| GrASP | 0.781 | 0.732 [0.671, 0.789] | 0.754 | 0.781 |
+| DeepPocket | 0.956 | 0.715 [0.657, 0.775] | 0.763 | 0.895 |
+| our detector's own order | 0.991 | 0.610 | 0.684 | 0.816 |
+
+Network minus each method, same structures (top-1 | top-N | top-(N+2)):
+
+| | DCA 4 Å | DCC 4 Å |
+|---|---|---|
+| P2Rank | **+0.092 [+0.040, +0.144]** \| +0.057 [+0.009, +0.104] \| +0.039 [+0.000, +0.080] | +0.026 [−0.041, +0.091] \| +0.053 [−0.014, +0.119] \| **+0.149 [+0.076, +0.222]** |
+| DeepSurf | +0.044 [−0.004, +0.094] \| **+0.057 [+0.009, +0.108]** \| **+0.088 [+0.041, +0.138]** | +0.018 [−0.070, +0.101] \| **+0.088 [+0.009, +0.165]** \| **+0.228 [+0.157, +0.302]** |
+| GrASP | **+0.118 [+0.055, +0.188]** \| +0.118 \| +0.149 | **+0.167 [+0.078, +0.250]** \| +0.228 \| +0.303 |
+| DeepPocket | **+0.136 [+0.078, +0.192]** \| +0.110 \| +0.035 [−0.000, +0.076] | **+0.096 [+0.022, +0.170]** \| +0.127 \| +0.180 |
+
+**Novel to all** (120 structures homologous neither to our manifest nor to the pre-2017 ligand-bound PDB the
+scPDB-trained methods drew from): network 0.867, DeepSurf 0.792, P2Rank 0.758; network minus P2Rank
+**+0.108 [+0.052, +0.171]** top-1.
+
+What this does and does not say.
+- **The first-rank gap to P2Rank on COACH420 is closed and reversed**, the question this project has been stuck
+  on since 2026-10-05. It is closed by the network, not by the ranker.
+- **The network alone beats the hybrid** (0.851 against 0.825). Cross-validation said the network features were
+  worth +0.056 to the ranker and every hand-built group about zero next to them; on the benchmark the ranker's
+  remaining columns cost 0.026. The method of this paper is the network; the ranker is an ablation.
+- **Against DeepSurf, the strongest external method, first rank is not separated**: +0.044 [−0.004, +0.094] at
+  DCA, +0.018 at DCC 4 Å. The separation is in recall: DeepSurf makes 1.8 predictions per structure and its
+  ceiling is 0.842, so on multi-site structures it has nothing to rank; top-(N+2) +0.088 and +0.228.
+- **At DCC 4 Å every method is within noise of the others at top-1** except GrASP and DeepPocket, which we beat.
+  Our centre precision (DCC 4 Å ceiling 0.886, median centre error 1.3 Å on validation) is the weak point.
+- One checkpoint, one benchmark. HOLO4K and LIGYSIS are NOT RUN with the network; a five-fold ensemble is NOT
+  RUN. The external methods are run with their published weights on our receptor protocol, so their own
+  training-set overlap with COACH420 is not controlled -- the novel-to-all row is the one that controls it.
+
 ## The reference on the current code, and the network out of fold (2026-10-12 to 10-14)
 
 **Three seeds of `full`, validation fold 0, 272 sites** (grid `runs/training/ablations/20261012-133051`):
